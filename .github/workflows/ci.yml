@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  node-and-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Validate plugin JS
+        run: |
+          node --check orca-plugin/accounts.mjs
+          node --check orca-plugin/bridge-core.mjs
+          node --check orca-plugin/main.mjs
+      - name: Tests Node
+        run: node --test tests/*.test.mjs
+      - name: Verificación estática del mod de Capri
+        run: |
+          python tests/check_csharp.py
+          python tests/check_voice_patterns.py
+          python tests/check_dashboard.py
+          python tests/check_public_repo.py
+  compile-csharp-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile single-file Capri mod against contract stub (.NET Windows)
+        run: dotnet build tests/windows-compile/CapriBridgeCompile.csproj -c Release -v minimal

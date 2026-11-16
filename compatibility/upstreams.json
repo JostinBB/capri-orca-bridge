@@ -1,0 +1,11 @@
+{
+  "capri": {
+    "repository": "lachydotmcg/capri-desktop",
+    "reviewedRelease": null
+  },
+  "orca": {
+    "repository": "stablyai/orca",
+    "reviewedRelease": null
+  },
+  "note": "reviewedRelease solo se actualiza después de revisar API y pasar pruebas; null no asegura compatibilidad."
+}

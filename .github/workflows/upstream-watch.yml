@@ -1,0 +1,50 @@
+name: Monitor updates of Capri and Orca
+on:
+  schedule:
+    - cron: '20 11 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check official upstream releases and create a review issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tracked = require('./compatibility/upstreams.json');
+            for (const [name, cfg] of Object.entries(tracked)) {
+              if (!cfg || typeof cfg !== 'object' || !cfg.repository) continue;
+              const [owner, repo] = cfg.repository.split('/');
+              let release;
+              try {
+                const all = (await github.rest.repos.listReleases({owner,repo,per_page:15})).data;
+                release = all.find(r => !r.draft);
+              }
+              catch (e) { core.warning(`${name}: cannot read latest release: ${e.message}`); continue; }
+              if (!release?.tag_name || release.tag_name === cfg.reviewedRelease) continue;
+              const title = `Revisar ${name}: ${release.tag_name}`;
+              const existing = await github.paginate(github.rest.issues.listForRepo, {
+                owner: context.repo.owner, repo: context.repo.repo,
+                state: 'open', per_page: 100
+              });
+              if (existing.some(i => !i.pull_request && i.title === title)) continue;
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title,
+                body: [
+                  `Actualización publicada: ${release.html_url}`,
+                  `Versión revisada en repositorio: ${cfg.reviewedRelease ?? 'ninguna'}`,
+                  '',
+                  '- [ ] Revisar cambios de API Capri/Orca y seguridad',
+                  '- [ ] Adaptar el puente solo si hace falta',
+                  '- [ ] Pasar CI JS/Python y compilación C# Windows',
+                  '- [ ] Probar manualmente en Capri y Orca reales',
+                  '- [ ] Actualizar `compatibility/upstreams.json`',
+                  '- [ ] Publicar una nueva release SOLO tras validar la integración'
+                ].join('\n')
+              });
+              core.notice(`Opened review issue for ${name} ${release.tag_name}`);
+            }

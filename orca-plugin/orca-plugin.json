@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "capri-bridge",
+  "name": "Capri-Orca Bridge",
+  "version": "0.10.0",
+  "description": "Conector local autenticado entre Capri Desktop y la API de Orca. No simula clics.",
+  "engines": {"orca": ">=1.4.248"},
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "contributes": {
+    "commands": [{"id":"bridge-info","title":"Capri Bridge: diagnostico"}],
+    "statusBarItems": [{"id":"bridge-status","text":"Capri bridge","icon":"plug","tooltip":"Puente local con Capri; desactiva este plugin para detenerlo"}]
+  },
+  "capabilities": [
+    {"kind":"workspace:read"},{"kind":"workspace:write"},
+    {"kind":"agent:read"},{"kind":"agent:launch"},
+    {"kind":"terminal:read"},{"kind":"terminal:send"},
+    {"kind":"history:read"}
+  ]
+}

@@ -1,0 +1,926 @@
+// capri-mod: 1
+// id: capri-orca-bridge
+// name: Capri Orca Bridge 0.10
+// version: 0.10.0
+// author: Proyecto independiente
+// description: Controla proyectos y agentes de Orca mediante su Plugin Host API, con voz y confirmacion. Sin clics.
+// permissions: chat, tools
+// requires: api 3
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Drawing;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Windows.Forms;
+using CapriDesktop;
+
+public class CapriOrcaBridge : ICapriMod
+{
+    private ICapriHost capri;
+    private Action<CapriMessage> onSending;
+    private bool stopped;
+    private int busy;
+    private string workspaceId = "";
+    private string workspaceName = "";
+    private string pendingAgent = "";
+    private string pendingPrompt = "";
+    private string pendingVerb = "";
+    private List<Dictionary<string, object>> pendingWorkspaces = new List<Dictionary<string, object>>();
+    private List<Dictionary<string, object>> pendingTerminals = new List<Dictionary<string, object>>();
+    private List<string> draft = new List<string>();
+    private List<Dictionary<string, object>> pendingAccounts = new List<Dictionary<string, object>>();
+    private string pendingAccountProvider = "";
+    private List<Dictionary<string, object>> pendingHistory = new List<Dictionary<string, object>>();
+    private ICapriTimer watchTimer;
+    private ICapriTimer quotaTimer;
+    private QuotaDashboard quotaDashboard;
+    private bool watchQuota;
+    private readonly HashSet<string> exhaustedWarnings=new HashSet<string>();
+    private string watchAgent = "";
+    private string watchTerminal = "";
+    private string watchWorkspace = "";
+    private bool watchSawWork;
+    private bool watchSaidBlocked;
+    private int watchErrors;
+    private bool dictating;
+    private bool paused;
+    private string draftAgent = "";
+    private const int MAX_PROMPT=12000;
+
+    public void Start(ICapriHost host)
+    {
+        capri=host; stopped=false;
+        workspaceId=capri.Store.Get("workspace_id","");
+        workspaceName=capri.Store.Get("workspace_name","");
+        watchQuota=capri.Store.Flag("watch_quota",false);
+        onSending = delegate(CapriMessage m) {
+            if(stopped || m==null || m.Source!="you" || String.IsNullOrWhiteSpace(m.Text))return;
+            if(Handle(m.Text.Trim()))m.Cancel=true;
+        };
+        capri.Chat.Sending += onSending;
+        watchTimer=capri.Timers.Every(12.0, delegate(){PollWatchedAgent();});
+        quotaTimer=capri.Timers.Every(300.0,delegate(){PollQuotas();});
+        capri.Brain.AddTool("orca_bridge", "Gestiona proyectos, sesiones y prompts de StablyAI Orca por API local, a peticion del usuario. No simula clics y requiere confirmacion antes de enviar tareas.", "Instruccion original del usuario en español", delegate(string command) {
+            if(!String.IsNullOrWhiteSpace(command))Ui(delegate(){Handle(command);});
+            return "El puente esta procesando la solicitud. Comprueba la respuesta visible de Capri; aun no se confirma que Orca la haya realizado.";
+        });
+        capri.Brain.AddTool("orca_context", "Consulta proyecto seleccionado en Orca y si el conector responde; no envia prompts.", "", delegate(string ignored) {
+            return "Proyecto seleccionado: "+(workspaceName.Length>0?workspaceName:"ninguno")+". Usa orca_bridge para otras operaciones.";
+        });
+        capri.Ui.AddMenuItem("Orca Bridge: probar conexion",delegate(){Check();});
+        capri.Ui.AddMenuItem("Orca Bridge: mostrar cuotas",delegate(){ShowUsage("");});
+        capri.Ui.AddMenuItem("Orca Bridge: ocultar cuotas",delegate(){HideUsage();});
+        capri.Log("Capri-Orca Bridge v0.10: API local autenticada. Voz/interrupciones controladas por Capri; sin otro microfono.");
+    }
+    public bool Heard(string words){return false;} // Chat.Sending incluye texto dictado cuando Capri lo envia al chat.
+    public void Stop(){
+        // Capri invokes Stop on the UI thread; release the window before marking the mod stopped.
+        if(quotaDashboard!=null){try{quotaDashboard.Shutdown();}catch(Exception){}quotaDashboard=null;}
+        stopped=true;
+        if(watchTimer!=null)watchTimer.Cancel();
+        if(quotaTimer!=null)quotaTimer.Cancel();
+        if(capri!=null && onSending!=null)capri.Chat.Sending-=onSending;
+        watchTerminal="";draft.Clear();pendingWorkspaces.Clear();pendingTerminals.Clear();pendingHistory.Clear();pendingAccounts.Clear();
+    }
+    private void Ui(Action a)
+    {
+        if(stopped || capri==null)return;
+        try { Form f=capri.Ui.Window; if(f!=null && !f.IsDisposed) {if(f.InvokeRequired)f.BeginInvoke(a); else a();} }
+        catch(Exception e){if(capri!=null)capri.Log("Bridge UI: "+e.Message);}
+    }
+    private void Say(string text)
+    {
+        if(stopped||capri==null)return;
+        capri.Say(text.Length>500?text.Substring(0,500)+". Consulta el detalle en Orca.":text);
+    }
+    private static string Norm(string s)
+    {
+        s=(s??"").Trim().ToLowerInvariant().Normalize(NormalizationForm.FormD);
+        StringBuilder b=new StringBuilder();
+        foreach(char c in s)if(CharUnicodeInfo.GetUnicodeCategory(c)!=UnicodeCategory.NonSpacingMark)b.Append(c);
+        return b.ToString();
+    }
+    private static string CleanAgent(string s)
+    {
+        s=Norm(s).Replace(" ","").Replace("-","");
+        if(s=="claudecode")return "claude";
+        if(Regex.IsMatch(s,@"^[a-z][a-z0-9]{1,40}$"))return s;
+        return "";
+    }
+    private bool Handle(string original)
+    {
+        string line=Regex.Replace(Norm(original),@"[¿?¡!.,;:]+"," ").Trim();
+        line=Regex.Replace(line,@"\s+"," ");
+        if(pendingAccounts.Count>0 || pendingWorkspaces.Count>0 || pendingTerminals.Count>0 || pendingHistory.Count>0)
+        {
+            int number=Choice(line);
+            if(number>0)
+            {
+                if(pendingAccounts.Count>0){SelectAccount(number);return true;}
+                if(pendingWorkspaces.Count>0){SelectWorkspace(number);return true;}
+                if(pendingHistory.Count>0){SelectHistory(number);return true;}
+                SelectTerminal(number);return true;
+            }
+            if(Regex.IsMatch(line,@"^(capri )?(orca )?(cancelar|ninguno|olvidalo)$"))
+            {pendingWorkspaces.Clear();pendingTerminals.Clear();pendingHistory.Clear();pendingAccounts.Clear();pendingAccountProvider="";pendingPrompt="";pendingVerb="";Say("Seleccion cancelada.");return true;}
+        }
+        // Ventana visual de cuotas: misma interfaz/voz de Capri, sin leer los porcentajes en alto.
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:muestra|mostrar|abre|abrir|ensena|despliega|show|display)\s+(?:(?:mis|las|my)\s+)?(?:cuotas|quota|quotas|usage)$")) {ShowUsage("");return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:oculta|ocultar|esconde|esconder|cierra|cerrar|hide|close)\s+(?:(?:mis|las|my)\s+)?(?:cuotas|quota|quotas|usage)$")) {HideUsage();return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:leeme|lee|read aloud|speak)\s+(?:(?:mis|las|my)\s+)?(?:cuotas|quota|quotas|usage)$")) {ReadUsage("");return true;}
+        if(dictating)
+        {
+            if(Regex.IsMatch(line,@"^(capri )?(?:orca )?(?:(?:pausar|pausa) dictado|pause dictation)$")){paused=true;Say("Dictado pausado.");return true;}
+            if(Regex.IsMatch(line,@"^(capri )?(?:orca )?(?:(?:reanudar|continuar) dictado|resume dictation)$")){paused=false;Say("Dictado reanudado.");return true;}
+            if(Regex.IsMatch(line,@"^(capri )?(?:orca )?(?:deshacer|borrar ultimo|borra ultimo|undo last)$")){if(draft.Count>0)draft.RemoveAt(draft.Count-1);Say("Ultima frase eliminada.");return true;}
+            if(Regex.IsMatch(line,@"^(capri )?(?:orca )?(?:(?:leer|mostrar) dictado|read dictation)$")){Say("El dictado tiene "+draft.Count+" partes y "+Draft().Length+" caracteres. Puedes enviarlo o continuar.");return true;}
+            if(Regex.IsMatch(line,@"^(capri )?(?:orca )?(?:(?:cancelar|descartar) dictado|cancel dictation)$")){draft.Clear();dictating=false;paused=false;Say("Dictado descartado.");return true;}
+            if(Regex.IsMatch(line,@"^(capri )?(?:orca )?(?:(?:enviar|manda|terminar) dictado|send dictation)$"))
+            {
+                string prompt=Draft();paused=true;
+                if(prompt.Length==0){Say("El dictado esta vacio.");return true;}
+                string agent=draftAgent.Length>0?draftAgent:"claude";
+                RequestSend(agent,prompt);
+                return true;
+            }
+            if(!paused){
+                if(original.Length>0 && Draft().Length+original.Length+1<=MAX_PROMPT){draft.Add(original);Say("Anotado. Fragmento "+draft.Count+".");}
+                else {paused=true;Say("Limite de 12000 caracteres. Dictado pausado.");}
+                return true;
+            }
+            // Pausado: permite abrir un proyecto o seleccionar una sesion antes de enviar el borrador.
+        }
+        Match m=Regex.Match(line,@"^(?:capri\s+)?(?:orca\s+)?(?:inicia|iniciar|empieza|empezar)\s+dictado(?:\s+para\s+(claude(?: code)?|codex|gemini|opencode|antigravity))?(?:\s+(?:en|para)\s+orca)?$");
+        if(m.Success)
+        {dictating=true;paused=false;draft.Clear();draftAgent=CleanAgent(m.Groups[1].Value);Say("Dictado iniciado"+(draftAgent.Length>0?" para "+draftAgent:"")+". Di Capri Orca enviar dictado cuando termines.");return true;}
+        Match specificQuota=Regex.Match(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:cuanto me queda|cuanto me resta|cuanta cuota tengo|cuota restante|remaining usage|how much do i have left)\s+(?:en|de|del|for)\s+(claude|codex|antigravity|gemini)$");
+        if(specificQuota.Success){ShowUsage(CleanAgent(specificQuota.Groups[1].Value));return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:cuanto me queda|cuanto uso me queda|cuanta cuota tengo|cuanto credito me queda|cuanto me resta|mi cuota|mostrar cuotas|cuotas restantes|usage|remaining usage|how much usage do i have left|how much do i have left)(?:\s+en\s+(?:orca|claude|codex|antigravity|gemini))?$")) {ShowUsage("");return true;}
+        Match q=Regex.Match(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:cuanto le queda a|cuanta cuota tiene|uso restante de|cuota de|remaining usage for)\s+(claude|codex|antigravity|gemini)$");
+        if(q.Success){ShowUsage(CleanAgent(q.Groups[1].Value));return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:vigila mis cuotas|avisame cuando se acabe la cuota|avisame si se acaba mi cuota|monitor my usage|watch usage)$")) {watchQuota=true;exhaustedWarnings.Clear();capri.Store.Set("watch_quota",true);Say("Vigilancia de cuotas activada. Revisare Orca cada cinco minutos mientras Capri este abierto.");return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:deja de vigilar mis cuotas|cancelar aviso de cuotas|stop watching usage)$")) {watchQuota=false;exhaustedWarnings.Clear();capri.Store.Set("watch_quota",false);Say("Vigilancia de cuotas desactivada.");return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:que cuentas tengo|mostrar cuentas|lista cuentas|listar cuentas|cuentas disponibles|que otras cuentas tengo|show accounts|list accounts)$")){ShowAccounts();return true;}
+        q=Regex.Match(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:cambia(?:me)? de cuenta de|cambia a otra cuenta de|usar otra cuenta de|switch account for|switch account of)\s+(claude|codex|antigravity|opencode|devin)$");
+        if(q.Success){OfferSwitch(CleanAgent(q.Groups[1].Value));return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:transfiere todo el contexto|handoff completo|pasar todo el contexto|transfer full context|hand off all context)(?:\s+.*)?$")) {Say("Orca tiene transferencia nativa entre agentes, pero su API publica no expone una orden que garantice copiar el historial completo. No creare otra sesion fingiendo que lleve todo el contexto.");return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?orca\s+(?:comprobar|estado|conectar|conexion|diagnostico)$")){Check();return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?(?:orca\s+)?(?:listar|mostrar|ver|que)\s+(?:los\s+)?proyectos(?:\s+de\s+orca)?$")){ListProjects();return true;}
+        m=Regex.Match(original,@"^(?:capri[\s,:]+)?(?:(?:en|de)[\s,:]+orca[\s,:]+)?(?:abre|abrir|selecciona|elige|cambia[\s,:]+a)[\s,:]+(?:(?:el|mi|este)[\s,:]+)?(?:proyecto|workspace)[\s,:]+(?:de[\s,:]+)?(.+?)(?:[\s,:]+en[\s,:]+orca)?$",RegexOptions.IgnoreCase);
+        if(!m.Success)m=Regex.Match(original,@"^(?:capri[\s,:]+)?orca[\s,:]+(?:abre|abrir|selecciona)[\s,:]+(?:(?:el|mi)[\s,:]+)?(?:proyecto|workspace)[\s,:]+(.+)$",RegexOptions.IgnoreCase);
+        if(!m.Success)m=Regex.Match(original,@"^(?:hey\s+)?(?:capri[,\s]+)?(?:in\s+orca[,\s]+)?(?:open|select|switch to)\s+(?:(?:my|the)\s+)?(?:project|workspace)\s+(.+?)(?:\s+in\s+orca)?[.!]?$",RegexOptions.IgnoreCase);
+        if(m.Success){FindProjects(m.Groups[1].Value.Trim(),"open");return true;}
+        m=Regex.Match(original,@"^(?:capri[\s,:]+)?(?:(?:en|desde)[\s,:]+orca[\s,:]+)?(?:dile|díle|pidele|pídele|envia|envía|manda)[\s,:]+(?:a|al)[\s,:]+(claude(?: code)?|codex|gemini|opencode|antigravity|pi|grok)[\s,:]+(?:que[\s,:]+|:[\s,:]*)(.+)$",RegexOptions.IgnoreCase|RegexOptions.Singleline);
+        if(!m.Success)m=Regex.Match(original,@"^(?:capri[\s,:]+)?(?:en[\s,:]+)?orca[\s,:]+(?:dile|díle|pidele|pídele|manda)[\s,:]+(?:a|al)[\s,:]+(claude(?: code)?|codex|gemini|opencode|antigravity|pi|grok)[\s,:]+(?:que[\s,:]+|:[\s,:]*)(.+)$",RegexOptions.IgnoreCase|RegexOptions.Singleline);
+        if(!m.Success)m=Regex.Match(original,@"^(?:hey\s+)?(?:capri[,\s]+)?(?:in\s+orca[,\s]+)?(?:tell|ask)\s+(claude(?: code)?|codex|gemini|opencode|antigravity|pi|grok)\s+(?:in\s+orca\s+)?to\s+(.+)$",RegexOptions.IgnoreCase|RegexOptions.Singleline);
+        if(m.Success){RequestSend(CleanAgent(m.Groups[1].Value),m.Groups[2].Value.Trim());return true;}
+        m=Regex.Match(original,@"^(?:capri[\s,:]+)?(?:en[\s,:]+orca[\s,:]+)?(?:crea|abre|inicia)[\s,:]+(?:una[\s,:]+)?(?:nueva[\s,:]+)?(?:sesion|sesión|terminal)[\s,:]+(?:de|para)[\s,:]+(claude(?: code)?|codex|gemini|opencode|antigravity)$",RegexOptions.IgnoreCase);
+        if(!m.Success)m=Regex.Match(original,@"^(?:capri[,\s]+)?(?:in\s+orca[,\s]+)?(?:start|create|open)\s+(?:a\s+)?new\s+(?:session|terminal)\s+(?:for|of)\s+(claude(?: code)?|codex|gemini|opencode|antigravity)$",RegexOptions.IgnoreCase);
+        if(m.Success){Launch(CleanAgent(m.Groups[1].Value));return true;}
+        m=Regex.Match(original,@"^(?:capri[\s,:]+)?(?:(?:en)[\s,:]+orca[\s,:]+)?(?:cambia|cambiar|selecciona|seleccionar|muestra)[\s,:]+(?:a|al)[\s,:]+(claude(?: code)?|codex|gemini|opencode|antigravity)$",RegexOptions.IgnoreCase);
+        if(!m.Success)m=Regex.Match(original,@"^(?:capri[,\s]+)?(?:in\s+orca[,\s]+)?(?:switch to|select|focus)\s+(claude(?: code)?|codex|gemini|opencode|antigravity)$",RegexOptions.IgnoreCase);
+        if(m.Success){FocusAgent(CleanAgent(m.Groups[1].Value));return true;}
+        m=Regex.Match(original,@"^(?:capri[\s,:]+)?(?:(?:en)[\s,:]+orca[\s,:]+)?(?:abre|abrir|muestra)[\s,:]+(?:el[\s,:]+)?archivo[\s,:]+(.+)$",RegexOptions.IgnoreCase);
+        if(!m.Success)m=Regex.Match(original,@"^(?:capri[,\s]+)?(?:in\s+orca[,\s]+)?open\s+(?:the\s+)?file\s+(.+)$",RegexOptions.IgnoreCase);
+        if(m.Success){OpenFile(m.Groups[1].Value.Trim());return true;}
+        m=Regex.Match(line,@"^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:que hace|como va|estado de|que esta haciendo|lee la respuesta de)\s+(claude|codex|gemini|opencode|antigravity)(?:\s+en\s+orca)?$");
+        if(!m.Success)m=Regex.Match(line,@"^(?:capri )?(?:in orca )?(?:what is|what's) (claude|codex|gemini|opencode|antigravity) (?:doing|working on)(?: in orca)?$");
+        if(m.Success){ReadAgent(CleanAgent(m.Groups[1].Value));return true;}
+        m=Regex.Match(line,@"^(?:capri )?(?:orca )?(?:avisa(?:me)? cuando termine|avisame cuando acabe|notify me when|tell me when) (?:el agente )?(claude|codex|gemini|opencode|antigravity)(?: finishes| is done)?$");
+        if(m.Success){WatchAgent(CleanAgent(m.Groups[1].Value));return true;}
+        if(Regex.IsMatch(line,@"^(?:capri )?(?:orca )?(?:cancelar aviso|dejar de vigilar|stop watching|cancel notification)$")) {StopWatch(true);return true;}
+        m=Regex.Match(line,@"^(?:capri )?(?:orca )?(?:reanuda|reanudar|recupera|retoma|resume)\s+(?:la\s+)?(?:ultima\s+|última\s+)?(?:sesion\s+|sesión\s+)?(?:de\s+|of\s+)?(claude|codex|gemini|opencode|antigravity)(?:\s+session)?$");
+        if(m.Success){ListSessionHistory(CleanAgent(m.Groups[1].Value));return true;}
+        m=Regex.Match(line,@"^(?:capri )?(?:orca )?(?:historial|sesiones anteriores|listar sesiones anteriores|show session history)(?:\s+(?:de|for)\s+(claude|codex|gemini|opencode|antigravity))?$");
+        if(m.Success){ListSessionHistory(CleanAgent(m.Groups[1].Value));return true;}
+        m=Regex.Match(line,@"^(?:capri )?(?:orca )?(?:start dictation|begin dictation)(?: for (claude|codex|gemini|opencode|antigravity))?$");
+        if(m.Success){dictating=true;paused=false;draft.Clear();draftAgent=CleanAgent(m.Groups[1].Value);Say("Dictado iniciado"+(draftAgent.Length>0?" para "+draftAgent:"")+". Di send dictation al terminar.");return true;}
+        if(Regex.IsMatch(line,@"^(?:capri )?(?:orca )?(?:list projects|show projects)$")){ListProjects();return true;}
+        if(Regex.IsMatch(line,@"^(?:capri\s+)?orca\s+(?:listar|mostrar|ver)\s+(?:agentes|sesiones)$")){ListAgents();return true;}
+        return false;
+    }
+    private static int Choice(string text)
+    {
+        text=Regex.Replace(Norm(text),@"[¿?¡!.,;:]+"," ").Trim();
+        text=Regex.Replace(text,@"^(?:capri|orca)\s+", "");
+        text=Regex.Replace(text,@"^(?:reanuda|reanudar|recupera|resume|open|elige|selecciona|the)\s+", "");
+        text=Regex.Replace(text,@"\s+(?:sesion|session)$", "");
+        if(Regex.IsMatch(text,@"^(?:(?:capri|orca|es|el|la|opcion|numero|elige|selecciona|abre|quiero|ese|este|este es)\s+)*1$|^(?:(?:el|la|the)\s+)?(?:primer[oa]?|first)$"))return 1;
+        if(Regex.IsMatch(text,@"^(?:(?:capri|orca|es|el|la|opcion|numero|elige|selecciona|abre|quiero|ese|este|este es)\s+)*2$|^(?:(?:el|la|the)\s+)?(?:segund[oa]?|second)$"))return 2;
+        if(Regex.IsMatch(text,@"^(?:(?:capri|orca|es|el|la|opcion|numero|elige|selecciona|abre|quiero|ese|este|este es)\s+)*3$|^(?:(?:el|la|the)\s+)?(?:tercer[oa]?|third)$"))return 3;
+        if(Regex.IsMatch(text,@"^(?:(?:capri|orca|es|el|la|opcion|numero|elige|selecciona|abre|quiero|ese|este|este es)\s+)*4$|^(?:(?:el|la|the)\s+)?(?:cuart[oa]?|fourth)$"))return 4;
+        if(Regex.IsMatch(text,@"^(?:(?:capri|orca|es|el|la|opcion|numero|elige|selecciona|abre|quiero|ese|este|este es)\s+)*5$|^(?:(?:el|la|the)\s+)?(?:quint[oa]?|fifth)$"))return 5;
+        return 0;
+    }
+    private string Draft(){return String.Join("\n",draft.ToArray()).Trim();}
+    private void Check(){Run("ping",new Dictionary<string,object>(),delegate(Dictionary<string,object> r){Say("Conexion directa con Orca operativa. API del servidor: "+Text(Obj(r,"hostApi"),"major")+"."+Text(Obj(r,"hostApi"),"minor")+".");});}
+    private void ListProjects(){Run("projects",new Dictionary<string,object>(),delegate(Dictionary<string,object> r){List<object> list=Arr(r,"workspaces");Say(list.Count==0?"Orca no tiene espacios de trabajo registrados.":"Workspaces de Orca: "+Names(list,5)+". Dime abre el proyecto y su nombre.");});}
+    private static string ProviderName(string provider)
+    {
+        if(provider=="claude")return "Claude";
+        if(provider=="codex")return "Codex";
+        if(provider=="antigravity")return "Antigravity";
+        if(provider=="gemini")return "Gemini";
+        return provider;
+    }
+    private static string Percent(Dictionary<string,object> w)
+    {
+        string n=Text(w,"remainingPercent");
+        double value;
+        return Double.TryParse(n,NumberStyles.Float,CultureInfo.InvariantCulture,out value)?value.ToString("0.#",CultureInfo.InvariantCulture)+" por ciento":"dato no disponible";
+    }
+    private static string Reset(Dictionary<string,object> w)
+    {
+        string n=Text(w,"resetAt");double ms;
+        if(!Double.TryParse(n,NumberStyles.Float,CultureInfo.InvariantCulture,out ms)||ms<=0)return "";
+        try {
+            DateTime when=new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc).AddMilliseconds(ms).ToLocalTime();
+            return ", se reinicia el "+when.ToString("dd/MM 'a las' HH:mm",CultureInfo.CurrentCulture);
+        }catch(Exception){return "";}
+    }
+    private static string UsagePhrase(Dictionary<string,object> usage)
+    {
+        List<object> windows=Arr(usage,"windows"), buckets=Arr(usage,"buckets");
+        if(windows.Count==0 && buckets.Count==0)return Text(usage,"notice").Length>0?Text(usage,"notice"):"sin porcentajes disponibles";
+        List<string> parts=new List<string>();
+        foreach(object o in windows) {
+            Dictionary<string,object> w=o as Dictionary<string,object>;if(w==null)continue;
+            parts.Add(Percent(w)+" restante en ventana "+Text(w,"label")+Reset(w));
+            if(parts.Count>=3)break;
+        }
+        if(parts.Count==0) foreach(object o in buckets) {
+            Dictionary<string,object> w=o as Dictionary<string,object>;if(w==null)continue;
+            parts.Add(Percent(w)+" restante para "+Text(w,"name")+Reset(w));
+            if(parts.Count>=3)break;
+        }
+        string phrase=String.Join("; ",parts.ToArray());
+        if(Bool(usage,"stale"))phrase="segun una lectura antigua, "+phrase;
+        if(Text(usage,"status")!="ok")phrase="dato no confirmado: "+phrase;
+        return phrase;
+    }
+    private static double Remaining(Dictionary<string,object> usage)
+    {
+        double least=101; bool found=false;
+        if(usage==null||Text(usage,"status")!="ok"||Bool(usage,"stale"))return -1;
+        foreach(object o in Arr(usage,"windows")) {
+            Dictionary<string,object>w=o as Dictionary<string,object>;if(w==null)continue;
+            double n;if(Double.TryParse(Text(w,"remainingPercent"),NumberStyles.Float,CultureInfo.InvariantCulture,out n)&&n>=0&&n<=100){found=true;least=Math.Min(least,n);}
+        }
+        foreach(object o in Arr(usage,"buckets")) {
+            Dictionary<string,object>w=o as Dictionary<string,object>;if(w==null)continue;
+            double n;if(Double.TryParse(Text(w,"remainingPercent"),NumberStyles.Float,CultureInfo.InvariantCulture,out n)&&n>=0&&n<=100){found=true;least=Math.Min(least,n);}
+        }
+        return found?least:-1;
+    }
+    private static string Alternatives(Dictionary<string,object> result,string exhaustedProvider)
+    {
+        List<string> choices=new List<string>();
+        foreach(object g in Arr(result,"accounts")) {
+            Dictionary<string,object>group=g as Dictionary<string,object>;
+            if(group==null||Text(group,"provider")!=exhaustedProvider)continue;
+            foreach(object o in Arr(group,"accounts")) {
+                Dictionary<string,object>a=o as Dictionary<string,object>;
+                if(a!=null&&!Bool(a,"active")&&!Bool(a,"needsSignIn")&&Remaining(Obj(a,"usage"))>0)
+                    choices.Add("otra cuenta de "+ProviderName(exhaustedProvider)+" con cuota reportada");
+            }
+        }
+        if(choices.Count==0)foreach(object o in Arr(result,"usage")) {
+            Dictionary<string,object>u=o as Dictionary<string,object>;
+            if(u==null||Text(u,"provider")==exhaustedProvider)continue;
+            if(Remaining(u)>0 && (Text(u,"provider")=="claude"||Text(u,"provider")=="codex"||Text(u,"provider")=="antigravity")) {
+                choices.Add(ProviderName(Text(u,"provider"))+" con cuota reportada");if(choices.Count>=2)break;
+            }
+        }
+        return choices.Count==0?"No hay alternativas con cuota comprobada en este momento.":"Orca muestra "+String.Join(" y ",choices.ToArray())+". Preguntame antes de cambiar.";
+    }
+    private void PollQuotas()
+    {
+        bool dashboardVisible=quotaDashboard!=null && !quotaDashboard.IsDisposed && quotaDashboard.Visible;
+        if((!watchQuota&&!dashboardVisible)||stopped||Interlocked.CompareExchange(ref busy,0,0)!=0)return;
+        Run("accounts_status",new Dictionary<string,object>(),delegate(Dictionary<string,object> result) {
+            if(quotaDashboard!=null && !quotaDashboard.IsDisposed && quotaDashboard.Visible)quotaDashboard.Render(result,"");
+            if(!watchQuota)return; // Abrir el panel no activa notificaciones de cuota sin permiso.
+            foreach(object o in Arr(result,"usage")) {
+                Dictionary<string,object>u=o as Dictionary<string,object>;if(u==null)continue;
+                string provider=Text(u,"provider");
+                if(provider!="claude"&&provider!="codex"&&provider!="antigravity")continue;
+                string key=provider;
+                foreach(object g in Arr(result,"accounts")) {
+                    Dictionary<string,object>group=g as Dictionary<string,object>;
+                    if(group==null||Text(group,"provider")!=provider)continue;
+                    foreach(object account in Arr(group,"accounts")) {
+                        Dictionary<string,object>a=account as Dictionary<string,object>;
+                        if(a!=null&&Bool(a,"active"))key=provider+":"+Text(a,"id");
+                    }
+                }
+                double remaining=Remaining(u);
+                if(remaining>0){exhaustedWarnings.Remove(key);continue;}
+                if(remaining==0 && !exhaustedWarnings.Contains(key)) {
+                    exhaustedWarnings.Add(key);
+                    Say("Orca reporta que se agoto una ventana de cuota de "+ProviderName(provider)+". "+Alternatives(result,provider));
+                }
+            }
+        },true,delegate(string error){
+            if(quotaDashboard!=null && !quotaDashboard.IsDisposed && quotaDashboard.Visible)quotaDashboard.ShowError(error);
+        });
+    }
+    // Solo consulta/carga UI; no usa TTS a menos que el usuario pida explicitamente "lee mis cuotas".
+    private void ShowUsage(string provider)
+    {
+        if(stopped || capri==null)return;
+        if(quotaDashboard==null || quotaDashboard.IsDisposed)quotaDashboard=new QuotaDashboard();
+        quotaDashboard.ShowLoading();
+        if(!quotaDashboard.Visible)quotaDashboard.Show();
+        else quotaDashboard.Activate();
+        RefreshQuotaWindow(provider);
+    }
+    private void HideUsage()
+    {
+        if(quotaDashboard!=null && !quotaDashboard.IsDisposed)quotaDashboard.Hide();
+    }
+    private void RefreshQuotaWindow(string provider)
+    {
+        if(quotaDashboard==null || quotaDashboard.IsDisposed || !quotaDashboard.Visible)return;
+        if(!Run("accounts_status",new Dictionary<string,object>(),delegate(Dictionary<string,object> result){
+            if(quotaDashboard!=null && !quotaDashboard.IsDisposed && quotaDashboard.Visible)
+                quotaDashboard.Render(result,provider);
+        },true,delegate(string error){
+            if(quotaDashboard!=null && !quotaDashboard.IsDisposed)quotaDashboard.ShowError(error);
+        }))quotaDashboard.ShowError("Otra consulta a Orca esta en curso. Cierra y vuelve a abrir esta ventana para actualizar.");
+    }
+    private void ReadUsage(string provider)
+    {
+        Run("accounts_status",new Dictionary<string,object>(),delegate(Dictionary<string,object> result){
+            List<string> lines=new List<string>();
+            foreach(object row in Arr(result,"usage")){
+                Dictionary<string,object> item=row as Dictionary<string,object>;if(item==null)continue;
+                string key=Text(item,"provider");
+                if(provider.Length>0 && key!=provider)continue;
+                if(provider.Length==0 && key!="claude"&&key!="codex"&&key!="antigravity"&&key!="gemini")continue;
+                if(Text(item,"status")=="unavailable" && provider.Length==0)continue;
+                lines.Add(ProviderName(key)+": "+UsagePhrase(item));
+            }
+            Say(lines.Count==0?"Orca no devolvio cuotas verificables.":String.Join(". ",lines.ToArray())+". Es la cuota restante por ventana, no tokens exactos.");
+        });
+    }
+    private void ShowAccounts()
+    {
+        Run("accounts_status",new Dictionary<string,object>(),delegate(Dictionary<string,object> result){
+            List<string> list=new List<string>();
+            foreach(object group in Arr(result,"accounts")){
+                Dictionary<string,object> g=group as Dictionary<string,object>;if(g==null)continue;
+                string p=Text(g,"provider"); List<object> accounts=Arr(g,"accounts");
+                if(accounts.Count==0)continue;
+                List<string> labels=new List<string>();
+                foreach(object item in accounts){Dictionary<string,object>a=item as Dictionary<string,object>;if(a==null)continue;
+                    Dictionary<string,object> u=Obj(a,"usage");
+                    string quota="";
+                    if(u!=null && Arr(u,"windows").Count>0){ Dictionary<string,object> window=Arr(u,"windows")[0] as Dictionary<string,object>;
+                        if(window!=null)quota="; "+Text(window,"label")+": "+Percent(window)+(Bool(u,"stale")?" (dato antiguo)":"");}
+                    labels.Add(Text(a,"name")+(Bool(a,"active")?" (activa)":"")+(Bool(a,"needsSignIn")?" (requiere entrar)":"")+quota);
+                    if(labels.Count>=3)break;}
+                list.Add(ProviderName(p)+": "+String.Join(", ",labels.ToArray()));
+            }
+            Say(list.Count==0?"Orca no tiene cuentas administradas en su lista.":String.Join(". ",list.ToArray())+". Para cambiar di Capri cambia de cuenta de Codex, Claude o Antigravity.");
+        });
+    }
+    private void OfferSwitch(string provider)
+    {
+        pendingAccounts.Clear();pendingAccountProvider="";
+        Run("accounts_status",new Dictionary<string,object>(),delegate(Dictionary<string,object> result){
+            List<Dictionary<string,object>> choices=new List<Dictionary<string,object>>();
+            foreach(object g in Arr(result,"accounts")) {
+                Dictionary<string,object> group=g as Dictionary<string,object>;if(group==null || Text(group,"provider")!=provider)continue;
+                foreach(object obj in Arr(group,"accounts")){Dictionary<string,object> account=obj as Dictionary<string,object>;
+                    if(account!=null && !Bool(account,"active") && !Bool(account,"needsSignIn") && Text(account,"id").Length>0)choices.Add(account);}
+            }
+            if(choices.Count==0){Say("Orca no tiene otra cuenta disponible de "+provider+". No se cambiara ninguna sesion.");return;}
+            if(choices.Count>5){Say("Orca tiene mas de cinco cuentas; selecciona una manualmente en su menu de cuentas.");return;}
+            pendingAccounts=choices;pendingAccountProvider=provider;
+            List<string> labels=new List<string>();for(int i=0;i<choices.Count;i++)labels.Add((i+1)+": "+Text(choices[i],"name"));
+            Say("Cuentas alternativas para "+ProviderName(provider)+": "+String.Join("; ",labels.ToArray())+". Di el numero. El cambio puede afectar nuevas sesiones, no la terminal actual.");
+        });
+    }
+    private void SelectAccount(int index)
+    {
+        if(index<1 || index>pendingAccounts.Count){Say("Numero de cuenta invalido.");return;}
+        Dictionary<string,object> selected=pendingAccounts[index-1];string provider=pendingAccountProvider;
+        pendingAccounts.Clear();pendingAccountProvider="";
+        string id=Text(selected,"id"),name=Text(selected,"name");
+        bool yes=MessageBox.Show(capri.Ui.Window,
+            "¿Cambiar la cuenta de "+ProviderName(provider)+" a "+name+"?\n\nEsta seleccion puede afectar NUEVAS sesiones en todos los proyectos. Las terminales abiertas suelen conservar su cuenta.",
+            "Confirmar cambio de cuenta de Orca",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes;
+        if(!yes){Say("Cambio de cuenta cancelado.");return;}
+        Dictionary<string,object> arg=Dict("provider",provider);arg["accountId"]=id;
+        Run("select_account",arg,delegate(Dictionary<string,object> r){
+            if(Bool(r,"selected"))Say("Orca confirmo la cuenta "+Text(r,"accountName")+" para "+ProviderName(provider)+". "+Text(r,"scope")+".");
+            else Say("Orca no confirmo el cambio; no lo repetire automaticamente.");
+        });
+    }
+    private static string Names(List<object> rows,int max)
+    {
+        List<string> names=new List<string>();int i=0;
+        foreach(object x in rows){if(i++>=max)break;Dictionary<string,object>d=x as Dictionary<string,object>;if(d!=null)names.Add(i+": "+Text(d,"name"));}
+        return String.Join("; ",names.ToArray());
+    }
+    private void FindProjects(string query,string verb)
+    {
+        pendingVerb=verb;
+        pendingWorkspaces.Clear();
+        Run("projects",new Dictionary<string,object>(),delegate(Dictionary<string,object> r){
+            List<object> all=Arr(r,"workspaces");List<Dictionary<string,object>> matches=new List<Dictionary<string,object>>();
+            string q=Norm(query);
+            foreach(object item in all){Dictionary<string,object>d=item as Dictionary<string,object>;if(d==null)continue;
+                if(Norm(Text(d,"name"))==q || Norm(Text(d,"project"))==q || Norm(Text(d,"path")).EndsWith("\\"+q) || Norm(Text(d,"path")).EndsWith("/"+q))matches.Add(d);
+            }
+            if(matches.Count==0)foreach(object item in all){Dictionary<string,object>d=item as Dictionary<string,object>;if(d==null)continue;
+                if(Norm(Text(d,"name")).Contains(q)||Norm(Text(d,"project")).Contains(q))matches.Add(d);
+            }
+            if(matches.Count==0){Say("No encontre un workspace con ese nombre. Di Capri Orca listar proyectos. Si el proyecto no tiene workspace, abrelo primero en Orca.");return;}
+            if(matches.Count>5){Say("Hay mas de cinco coincidencias. Dime el nombre mas preciso del proyecto.");return;}
+            if(matches.Count==1){OpenWorkspace(matches[0]);return;}
+            pendingWorkspaces=matches;
+            List<object> choices=new List<object>();foreach(var item in matches)choices.Add(item);
+            Say("Encontre "+matches.Count+" espacios parecidos: "+Names(choices,5)+". Di el primero, el segundo o el numero.");
+        });
+    }
+    private void SelectWorkspace(int i){if(i<1||i>pendingWorkspaces.Count){Say("Ese numero no existe entre las opciones.");return;}Dictionary<string,object> w=pendingWorkspaces[i-1];pendingWorkspaces.Clear();OpenWorkspace(w);}
+    private void OpenWorkspace(Dictionary<string,object> w)
+    {
+        string id=Text(w,"id"),name=Text(w,"name");
+        Run("open_workspace",Dict("workspaceId",id),delegate(Dictionary<string,object> r){
+            if(!Bool(r,"opened")){Say("Orca no confirmo que abriera el proyecto.");return;}
+            workspaceId=id;workspaceName=name;
+            pendingTerminals.Clear();pendingHistory.Clear();
+            capri.Store.Set("workspace_id",id);capri.Store.Set("workspace_name",name);
+            Say("Abri y seleccione "+workspaceName+" en Orca.");
+            if(pendingPrompt.Length>0){string a=pendingAgent,p=pendingPrompt;pendingAgent="";pendingPrompt="";RequestSend(a,p);}
+        });
+    }
+    private void ListAgents()
+    {
+        if(workspaceId.Length==0){Say("Primero dime que proyecto abrir.");return;}
+        Run("agents",Dict("workspaceId",workspaceId),delegate(Dictionary<string,object> r){
+            List<object> agents=Arr(r,"agents");
+            if(agents.Count==0){Say("No hay agentes detectados en este proyecto.");return;}
+            List<string> result=new List<string>();foreach(object a in agents){Dictionary<string,object>d=a as Dictionary<string,object>;if(d!=null)result.Add(Text(d,"agent")+" ("+Text(d,"state")+")");if(result.Count>=8)break;}
+            Say("Agentes de "+workspaceName+": "+String.Join("; ",result.ToArray()));
+        });
+    }
+    private void RequestSend(string agent,string prompt)
+    {
+        if(String.IsNullOrEmpty(agent)||String.IsNullOrWhiteSpace(prompt)||prompt.Length>MAX_PROMPT){Say("Agente o prompt no valido.");return;}
+        if(workspaceId.Length==0)
+        {pendingAgent=agent;pendingPrompt=prompt;Say("Primero dime el proyecto. Puedes decir: Capri, abre el proyecto ventas.");ListProjects();return;}
+        Run("agents",Dict("workspaceId",workspaceId),delegate(Dictionary<string,object> result){
+            List<Dictionary<string,object>> matches=new List<Dictionary<string,object>>();
+            foreach(object row in Arr(result,"agents")){Dictionary<string,object> a=row as Dictionary<string,object>;
+                if(a!=null && CleanAgent(Text(a,"agent"))==agent && Text(a,"terminalId").Length>0)matches.Add(a);
+            }
+            if(matches.Count==0){Say("En "+workspaceName+" no encontre una terminal activa de "+agent+". Si usas una sesion Chat, no puedo enviarle texto con esta API. Puedes pedirme crear una nueva sesion de terminal.");return;}
+            if(matches.Count>5){Say("Hay demasiadas sesiones de "+agent+". Cierra algunas o especifica una terminal.");return;}
+            pendingAgent=agent;pendingPrompt=prompt;pendingVerb="send";
+            if(matches.Count>1){pendingTerminals=matches;List<object> display=new List<object>();foreach(var v in matches)display.Add(v);Say("Tienes "+matches.Count+" sesiones de "+agent+": "+NamesTerm(display)+". Dime el numero de la sesion.");return;}
+            pendingAgent="";pendingPrompt="";
+            ConfirmAndSend(agent,prompt,Text(matches[0],"terminalId"));
+        });
+    }
+    private static string NamesTerm(List<object> list)
+    {
+        List<string> names=new List<string>();int i=0;foreach(object x in list){i++;Dictionary<string,object>d=x as Dictionary<string,object>;
+            names.Add(i+": "+(Text(d,"title").Length>0?Text(d,"title"):Text(d,"terminalId"))+" ("+Text(d,"state")+")");}
+        return String.Join("; ",names.ToArray());
+    }
+    private void SelectTerminal(int i)
+    {
+        if(i<1||i>pendingTerminals.Count){Say("Numero de sesion invalido.");return;}
+        Dictionary<string,object> choice=pendingTerminals[i-1];pendingTerminals.Clear();
+        string agent=pendingAgent,prompt=pendingPrompt; pendingAgent="";pendingPrompt="";
+        string selectedVerb=pendingVerb;pendingVerb="";
+        if(selectedVerb=="focus"){FocusTerminal(agent,Text(choice,"terminalId"));return;}
+        if(selectedVerb=="read"){ReadTerminal(agent,Text(choice,"terminalId"));return;}
+        if(selectedVerb=="watch"){StartWatch(agent,Text(choice,"terminalId"),Text(choice,"state"));return;}
+        ConfirmAndSend(agent,prompt,Text(choice,"terminalId"));
+    }
+    private void ConfirmAndSend(string agent,string prompt,string terminalId)
+    {
+        if(workspaceId.Length==0||terminalId.Length==0){Say("La sesion no esta seleccionada.");return;}
+        bool yes=MessageBox.Show(capri.Ui.Window,"Proyecto: "+workspaceName+"\nAgente: "+agent+"\nTerminal: "+terminalId+"\n\nPROMPT:\n"+prompt+"\n\nEl agente podria modificar archivos o ejecutar comandos. ¿Enviar?","Confirmar prompt para Orca",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes;
+        if(!yes){Say("No envie el prompt.");return;}
+        Dictionary<string,object> args=Dict("workspaceId",workspaceId);args["agent"]=agent;args["terminalId"]=terminalId;args["prompt"]=prompt;
+        Run("send_prompt",args,delegate(Dictionary<string,object> r){
+            if(Bool(r,"accepted")){Say("Orca recibio la tarea para "+agent+" en "+workspaceName+". Todavia no ha terminado.");
+                if(dictating){draft.Clear();dictating=false;paused=false;draftAgent="";}
+            }else Say("Orca no confirmo el envio; no se reintentara automaticamente.");
+        });
+    }
+    private void FocusAgent(string agent)
+    {
+        if(workspaceId.Length==0){Say("Primero abre el proyecto correspondiente.");return;}
+        Run("agents",Dict("workspaceId",workspaceId),delegate(Dictionary<string,object> r){
+            List<Dictionary<string,object>> matches=new List<Dictionary<string,object>>();
+            foreach(object row in Arr(r,"agents")){Dictionary<string,object>a=row as Dictionary<string,object>;
+                if(a!=null && CleanAgent(Text(a,"agent"))==agent && Text(a,"terminalId").Length>0)matches.Add(a);}
+            if(matches.Count==0){Say("No encuentro ninguna terminal de "+agent+" en este proyecto.");return;}
+            if(matches.Count>5){Say("Tienes demasiadas sesiones de "+agent+". Selecciona una manualmente en Orca.");return;}
+            if(matches.Count==1){FocusTerminal(agent,Text(matches[0],"terminalId"));return;}
+            pendingTerminals=matches;pendingAgent=agent;pendingPrompt="";pendingVerb="focus";
+            List<object> display=new List<object>();foreach(var x in matches)display.Add(x);
+            Say("¿Que sesion de "+agent+" quieres mostrar? "+NamesTerm(display)+". Di el numero.");
+        });
+    }
+    private void FocusTerminal(string agent,string terminalId)
+    {
+        Dictionary<string,object> args=Dict("workspaceId",workspaceId);args["agent"]=agent;args["terminalId"]=terminalId;
+        Run("focus_agent",args,delegate(Dictionary<string,object> r){Say(Bool(r,"focused")?"Orca cambio a esa sesion de "+agent+" sin usar clics.":"Orca no confirmo que pudiera enfocar esa sesion.");});
+    }
+    private void OpenFile(string file)
+    {
+        if(workspaceId.Length==0){Say("Primero abre el proyecto correspondiente.");return;}
+        Dictionary<string,object> args=Dict("workspaceId",workspaceId);args["path"]=file;
+        Run("open_file",args,delegate(Dictionary<string,object> r){Say(Bool(r,"opened")?"Orca abrio el archivo "+file+".":"Orca no pudo abrir ese archivo.");});
+    }
+    private void ReadAgent(string agent)
+    {
+        if(workspaceId.Length==0){Say("Primero abre el proyecto de Orca.");return;}
+        Run("agents",Dict("workspaceId",workspaceId),delegate(Dictionary<string,object> r){
+            List<Dictionary<string,object>> matches=MatchesAgent(r,agent);
+            if(matches.Count==0){Say("No hay terminal de "+agent+" en este proyecto.");return;}
+            if(matches.Count>5){Say("Demasiadas sesiones. Especifica una en Orca.");return;}
+            if(matches.Count==1){ReadTerminal(agent,Text(matches[0],"terminalId"));return;}
+            pendingTerminals=matches;pendingAgent=agent;pendingVerb="read";
+            List<object> opts=new List<object>();foreach(var x in matches)opts.Add(x);
+            Say("¿De cual sesion quieres leer? "+NamesTerm(opts)+". Di el numero.");
+        });
+    }
+    private void ReadTerminal(string agent,string terminalId)
+    {
+        Dictionary<string,object> args=Dict("workspaceId",workspaceId);args["agent"]=agent;args["terminalId"]=terminalId;args["maxLines"]=12;
+        Run("read_agent",args,delegate(Dictionary<string,object> r){
+            List<object> lines=Arr(r,"lines");string last=lines.Count>0?Convert.ToString(lines[lines.Count-1]):"sin salida disponible";
+            Say(agent+" aparece como "+Text(r,"state")+". Ultima salida: "+last);
+        });
+    }
+    private static List<Dictionary<string,object>> MatchesAgent(Dictionary<string,object> result,string agent)
+    {
+        List<Dictionary<string,object>> matches=new List<Dictionary<string,object>>();
+        foreach(object row in Arr(result,"agents")){
+            Dictionary<string,object> a=row as Dictionary<string,object>;
+            if(a!=null && CleanAgent(Text(a,"agent"))==agent && Text(a,"terminalId").Length>0)matches.Add(a);
+        }
+        return matches;
+    }
+    private void ListSessionHistory(string agent)
+    {
+        if(workspaceId.Length==0){Say("Primero selecciona un proyecto en Orca.");return;}
+        Dictionary<string,object> arg=Dict("workspaceId",workspaceId);arg["limit"]=50;
+        if(agent.Length>0)arg["agent"]=agent;
+        Run("session_history",arg,delegate(Dictionary<string,object> result){
+            pendingHistory.Clear();pendingVerb="";
+            foreach(object entry in Arr(result,"sessions")){
+                Dictionary<string,object> row=entry as Dictionary<string,object>;
+                if(row!=null && Text(row,"sessionId").Length>0 && pendingHistory.Count<5) pendingHistory.Add(row);
+            }
+            if(pendingHistory.Count==0){Say("No hay sesiones recuperables para ese agente en este proyecto.");return;}
+            pendingVerb="resume";
+            List<string> items=new List<string>();for(int i=0;i<pendingHistory.Count;i++){
+                Dictionary<string,object> row=pendingHistory[i];
+                items.Add((i+1)+": "+Text(row,"agent")+" "+Text(row,"title")+(Bool(row,"running")?" (activa)":""));
+            }
+            Say("Sesiones: "+String.Join("; ",items.ToArray())+". Di la primera, segunda, etc. para reanudar. O cancelar.");
+        });
+    }
+    private void SelectHistory(int i)
+    {
+        if(i<1 || i>pendingHistory.Count){Say("Numero no valido.");return;}
+        Dictionary<string,object> row=pendingHistory[i-1];pendingHistory.Clear();pendingVerb="";
+        string agent=CleanAgent(Text(row,"agent")),session=Text(row,"sessionId");
+        if(agent.Length==0 || session.Length==0){Say("Sesion no valida.");return;}
+        bool yes=MessageBox.Show(capri.Ui.Window,"Reanudar sesion de "+agent+" en "+workspaceName+"?\nSesion: "+session,
+             "Confirmar reanudacion de Orca",MessageBoxButtons.YesNo,MessageBoxIcon.Question)==DialogResult.Yes;
+        if(!yes){Say("Reanudacion cancelada.");return;}
+        Dictionary<string,object> arg=Dict("workspaceId",workspaceId);arg["agent"]=agent;arg["sessionId"]=session;
+        Run("resume_session",arg,delegate(Dictionary<string,object> r){
+            Say(Bool(r,"started")?"Orca reanudo "+agent+" en una terminal nueva.":"La sesion ya estaba ejecutandose. Terminal "+Text(r,"terminalId"));
+        });
+    }
+    private void WatchAgent(string agent)
+    {
+        if(workspaceId.Length==0){Say("Abre primero un proyecto de Orca.");return;}
+        Run("agents",Dict("workspaceId",workspaceId),delegate(Dictionary<string,object> r){
+            List<Dictionary<string,object>> matches=MatchesAgent(r,agent);
+            if(matches.Count==0){Say("No encontre terminal de "+agent+" para vigilar.");return;}
+            if(matches.Count>5){Say("Hay demasiadas sesiones; selecciona una manualmente.");return;}
+            if(matches.Count==1){StartWatch(agent,Text(matches[0],"terminalId"),Text(matches[0],"state"));return;}
+            pendingTerminals=matches;pendingAgent=agent;pendingVerb="watch";
+            List<object> opts=new List<object>();foreach(var x in matches)opts.Add(x);
+            Say("¿Cual sesion de "+agent+" quieres vigilar? "+NamesTerm(opts)+". Di el numero.");
+        });
+    }
+    private void StartWatch(string agent,string terminalId,string state)
+    {
+        watchAgent=agent;watchTerminal=terminalId;watchWorkspace=workspaceId;watchSawWork=state=="working";
+        watchSaidBlocked=false;watchErrors=0;
+        if(state=="done"){Say("Esta sesion de "+agent+" ya aparece terminada.");StopWatch(false);return;}
+        Say("Vigilare a "+agent+" en "+workspaceName+" y te avisare cuando Orca indique que termino.");
+    }
+    private void StopWatch(bool speak)
+    {
+        bool was=watchTerminal.Length>0;watchTerminal="";watchAgent="";watchWorkspace="";
+        watchErrors=0;watchSaidBlocked=false;watchSawWork=false;
+        if(speak)Say(was?"Aviso de agente cancelado.":"No habia ningun agente vigilado.");
+    }
+    private void PollWatchedAgent()
+    {
+        if(stopped || watchTerminal.Length==0 || Interlocked.CompareExchange(ref busy,0,0)!=0)return;
+        string terminal=watchTerminal,agent=watchAgent,ws=watchWorkspace;
+        Dictionary<string,object> arg=Dict("workspaceId",ws);arg["agent"]=agent;arg["terminalId"]=terminal;
+        Run("agent_status",arg,delegate(Dictionary<string,object> r){
+            if(watchTerminal!=terminal || watchWorkspace!=ws)return;
+            watchErrors=0;
+            string state=Text(r,"state");
+            if(state=="working")watchSawWork=true;
+            if(state=="blocked" && !watchSaidBlocked){watchSaidBlocked=true;Say(agent+" necesita tu intervencion en Orca.");}
+            if(state=="done") {
+                string finalMessage=watchSawWork?agent+" termino su tarea en Orca.":agent+" figura como terminado en Orca.";
+                StopWatch(false);Say(finalMessage+" Puedes pedirme que lea el resultado.");
+            }
+        },true);
+    }
+    private void Launch(string agent)
+    {
+        if(workspaceId.Length==0){Say("Primero abre un proyecto en Orca.");return;}
+        bool yes=MessageBox.Show(capri.Ui.Window,"Iniciar una NUEVA terminal "+agent+" en el workspace "+workspaceName+"?","Crear agente en Orca",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes;
+        if(!yes){Say("No se creo una sesion.");return;}
+        Dictionary<string,object> args=Dict("workspaceId",workspaceId);args["agent"]=agent;
+        Run("launch_agent",args,delegate(Dictionary<string,object> r){Say("Orca inicio una terminal de "+agent+". No es una sesion Chat.");});
+    }
+    private static Dictionary<string,object> Dict(string key,object value){Dictionary<string,object>d=new Dictionary<string,object>();d[key]=value;return d;}
+    private static Dictionary<string,object> Obj(Dictionary<string,object>d,string k){object v;return d!=null&&d.TryGetValue(k,out v)?v as Dictionary<string,object>:null;}
+    private static List<object> Arr(Dictionary<string,object>d,string k){object v;return d!=null&&d.TryGetValue(k,out v)?v as List<object>??new List<object>():new List<object>();}
+    private static string Text(Dictionary<string,object>d,string k){object v;return d!=null&&d.TryGetValue(k,out v)&&v!=null?Convert.ToString(v):"";}
+    private static bool Bool(Dictionary<string,object>d,string k){object v;return d!=null&&d.TryGetValue(k,out v)&&v is bool&&(bool)v;}
+    private bool Run(string operation,Dictionary<string,object> arguments,Action<Dictionary<string,object>> callback,bool quiet=false,Action<string> failure=null)
+    {
+        if(Interlocked.CompareExchange(ref busy,1,0)!=0){if(!quiet)Say("Hay otra consulta a Orca en curso. Repite cuando termine.");return false;}
+        ThreadPool.QueueUserWorkItem(delegate(object state){
+            Dictionary<string,object> result=null;string error=null;
+            try{result=Call(operation,arguments);}catch(Exception e){error=e.Message;}
+            Interlocked.Exchange(ref busy,0);
+            Ui(delegate(){
+                try {
+                    if(error!=null){
+                        if(failure!=null)failure(error);
+                        else if(!quiet)Say("Error de conexion Orca: "+error);
+                        else if(operation=="agent_status" && ++watchErrors>=3){StopWatch(false);Say("No puedo seguir vigilando Orca: "+error);}
+                    }else callback(result);
+                } catch(Exception e){
+                    capri.Log("Capri-Orca error en callback: "+e.ToString());
+                    Say("La solicitud a Orca produjo un error. Revisa el registro de Capri.");
+                }
+            });
+        });
+        return true;
+    }
+    private Dictionary<string,object> Call(string operation,Dictionary<string,object> arguments)
+    {
+        string path=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CapriOrcaBridge","connection.json");
+        if(!File.Exists(path))throw new InvalidOperationException("No encuentro el plugin de Orca activo. Instala el plugin interno y habilitalo.");
+        Dictionary<string,object> data=new JsonReader(File.ReadAllText(path,Encoding.UTF8)).Read() as Dictionary<string,object>;
+        if(data==null || Text(data,"host")!="127.0.0.1")throw new FormatException("Archivo de conexion invalido");
+        int port;if(!Int32.TryParse(Text(data,"port"),out port)||port<1024||port>65535)throw new FormatException("Puerto local invalido");
+        string token=Text(data,"token");if(!Regex.IsMatch(token,@"^[a-f0-9]{64}$"))throw new FormatException("Clave de conexion no valida");
+        Dictionary<string,object> payload=Dict("version",1);payload["operation"]=operation;payload["requestId"]=Guid.NewGuid().ToString("N");payload["params"]=arguments;
+        byte[] bytes=Encoding.UTF8.GetBytes(WriteJson(payload));
+        HttpWebRequest req=(HttpWebRequest)WebRequest.Create("http://127.0.0.1:"+port+"/v1");
+        req.Method="POST";req.Proxy=null;req.AllowAutoRedirect=false;req.KeepAlive=false;req.Timeout=40000;req.ReadWriteTimeout=40000;
+        req.ContentType="application/json";req.ContentLength=bytes.Length;req.Headers["x-capri-orca-token"]=token;
+        using(Stream dest=req.GetRequestStream())dest.Write(bytes,0,bytes.Length);
+        string output;
+        try{using(HttpWebResponse resp=(HttpWebResponse)req.GetResponse())using(StreamReader sr=new StreamReader(resp.GetResponseStream(),Encoding.UTF8))output=sr.ReadToEnd();}
+        catch(WebException e){if(e.Response==null)throw new IOException("Orca no responde (podria estar cerrado). No se reenvio la accion.");
+            using(StreamReader sr=new StreamReader(e.Response.GetResponseStream(),Encoding.UTF8))output=sr.ReadToEnd();}
+        Dictionary<string,object> response=new JsonReader(output).Read() as Dictionary<string,object>;
+        if(response==null)throw new FormatException("Respuesta invalida del puente");
+        if(!Bool(response,"ok")){Dictionary<string,object> err=Obj(response,"error");throw new InvalidOperationException(Text(err,"message"));}
+        Dictionary<string,object> result=Obj(response,"result");if(result==null)throw new FormatException("Orca no devolvio un resultado");
+        return result;
+    }
+    private static string WriteJson(object value)
+    {
+        if(value==null)return "null";
+        if(value is string){StringBuilder b=new StringBuilder("\"");foreach(char c in (string)value){if(c=='\\'||c=='\"'){b.Append('\\');b.Append(c);}else if(c=='\n')b.Append("\\n");else if(c=='\r')b.Append("\\r");else if(c=='\t')b.Append("\\t");else if(c<32)b.Append("\\u"+((int)c).ToString("x4"));else b.Append(c);}return b.Append('"').ToString();}
+        if(value is bool)return (bool)value?"true":"false";
+        Dictionary<string,object> obj=value as Dictionary<string,object>;
+        if(obj!=null){List<string> parts=new List<string>();foreach(KeyValuePair<string,object> item in obj)parts.Add(WriteJson(item.Key)+":"+WriteJson(item.Value));return "{"+String.Join(",",parts.ToArray())+"}";}
+        if(value is int)return ((int)value).ToString(CultureInfo.InvariantCulture);
+        throw new FormatException("Tipo JSON no compatible");
+    }
+    private class JsonReader
+    {
+        private readonly string source;private int pos;
+        public JsonReader(string json){source=json??"";}
+        public object Read(){object result=Value(0);Space();if(pos!=source.Length)throw new FormatException("JSON tiene texto extra");return result;}
+        private void Space(){while(pos<source.Length&&Char.IsWhiteSpace(source[pos]))pos++;}
+        private char Peek(){Space();if(pos>=source.Length)throw new FormatException("JSON incompleto");return source[pos];}
+        private object Value(int depth)
+        {
+            if(depth>40)throw new FormatException("JSON demasiado profundo");char c=Peek();
+            if(c=='{')return Object(depth+1);if(c=='[')return Array(depth+1);if(c=='"')return String();
+            if(source.Substring(pos).StartsWith("true",StringComparison.Ordinal)){pos+=4;return true;}
+            if(source.Substring(pos).StartsWith("false",StringComparison.Ordinal)){pos+=5;return false;}
+            if(source.Substring(pos).StartsWith("null",StringComparison.Ordinal)){pos+=4;return null;}
+            int begin=pos;if(c=='-'||Char.IsDigit(c)){while(pos<source.Length&&"-+.eE0123456789".IndexOf(source[pos])>=0)pos++;return source.Substring(begin,pos-begin);}
+            throw new FormatException("JSON invalido");
+        }
+        private Dictionary<string,object> Object(int depth)
+        {Dictionary<string,object>d=new Dictionary<string,object>(StringComparer.Ordinal);pos++;if(Peek()=='}'){pos++;return d;}
+            while(true){if(Peek()!='"')throw new FormatException("Clave JSON invalida");string key=String();if(Peek()!=':')throw new FormatException("Falta dos puntos");pos++;d[key]=Value(depth);char next=Peek();pos++;if(next=='}')return d;if(next!=',')throw new FormatException("Objeto JSON invalido");}}
+        private List<object> Array(int depth)
+        {List<object>a=new List<object>();pos++;if(Peek()==']'){pos++;return a;}while(true){a.Add(Value(depth));char next=Peek();pos++;if(next==']')return a;if(next!=',')throw new FormatException("Lista JSON invalida");}}
+        private string String()
+        {if(source[pos++]!='"')throw new FormatException("Texto JSON invalido");StringBuilder b=new StringBuilder();while(pos<source.Length){char c=source[pos++];if(c=='"')return b.ToString();if(c<32)throw new FormatException("Control en JSON");if(c!='\\'){b.Append(c);continue;}if(pos>=source.Length)throw new FormatException("Escape JSON incompleto");c=source[pos++];if(c=='u'){if(pos+4>source.Length)throw new FormatException("Unicode incompleto");int v;if(!Int32.TryParse(source.Substring(pos,4),NumberStyles.HexNumber,CultureInfo.InvariantCulture,out v))throw new FormatException("Unicode invalido");b.Append((char)v);pos+=4;continue;}if(c=='n')b.Append('\n');else if(c=='r')b.Append('\r');else if(c=='t')b.Append('\t');else if(c=='b')b.Append('\b');else if(c=='f')b.Append('\f');else if(c=='"'||c=='\\'||c=='/')b.Append(c);else throw new FormatException("Escape JSON invalido");}throw new FormatException("Cadena JSON incompleta");}
+    }
+    // Ventana flotante opcional con la paleta oscura/rosa/cian de Capri. Todo local.
+    // Se crea en el hilo UI de Capri, no mueve el mouse ni inspecciona otras ventanas.
+    private sealed class QuotaDashboard : Form
+    {
+        private static readonly Color Back = Color.FromArgb(12,15,25);
+        private static readonly Color PanelBack = Color.FromArgb(24,30,46);
+        private static readonly Color Fore = Color.FromArgb(238,241,250);
+        private static readonly Color Faint = Color.FromArgb(155,167,192);
+        private static readonly Color Cyan = Color.FromArgb(78,226,238);
+        private static readonly Color Pink = Color.FromArgb(255,72,153);
+        private readonly FlowLayoutPanel cards;
+        private readonly Label status;
+        private readonly Label count;
+        private bool shuttingDown;
+
+        public QuotaDashboard()
+        {
+            Text = "CAPRI / ORCA - CUOTAS";
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.CenterScreen;
+            Size = new Size(636, 550);
+            MinimumSize = Size;
+            BackColor = Back;
+            ShowInTaskbar = false;
+            TopMost = true;
+            AutoScaleMode = AutoScaleMode.Font;
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
+            Padding = new Padding(2);
+            Panel edge = new Panel(); edge.Dock = DockStyle.Fill; edge.BackColor = Pink;
+            Controls.Add(edge);
+            Panel content = new Panel();content.Dock = DockStyle.Fill;content.BackColor = Back;content.Padding = new Padding(19,16,19,16);
+            edge.Controls.Add(content);
+
+            Panel bar = new Panel();bar.Height=65;bar.Dock=DockStyle.Top;bar.BackColor=Back;
+            content.Controls.Add(bar);
+            Label eyebrow = MakeLabel("CAPRI   /   ORCA BRIDGE", 9, Cyan, FontStyle.Bold);
+            eyebrow.Location = new Point(5,0);eyebrow.Size=new Size(365,20);bar.Controls.Add(eyebrow);
+            Label title = MakeLabel("MIS CUOTAS", 22, Fore, FontStyle.Bold);
+            title.Location = new Point(3,17);title.Size=new Size(385,38);bar.Controls.Add(title);
+            Button close = new Button();close.Text="×";close.Width=40;close.Height=35;
+            close.FlatStyle=FlatStyle.Flat;close.FlatAppearance.BorderSize=0;close.BackColor=PanelBack;
+            close.ForeColor=Fore;close.Font=new Font("Segoe UI",16,FontStyle.Bold);
+            close.Anchor=AnchorStyles.Top|AnchorStyles.Right;
+            close.Location=new Point(555,5);close.TabStop=true;
+            close.Click+=delegate(object sender,EventArgs e){Hide();};
+            bar.Controls.Add(close);
+            Panel accent = new Panel();accent.Height=2;accent.Dock=DockStyle.Top;accent.BackColor=Pink;
+            content.Controls.Add(accent);accent.BringToFront();bar.BringToFront();
+
+            Panel footer=new Panel();footer.Dock=DockStyle.Bottom;footer.Height=55;footer.BackColor=Back;
+            content.Controls.Add(footer);
+            count=MakeLabel("",9,Faint,FontStyle.Regular);count.Dock=DockStyle.Top;count.Height=23;footer.Controls.Add(count);
+            Label hint=MakeLabel("Datos de Orca. Ninguna cuota se estima si no hay lectura.",9,Faint,FontStyle.Regular);
+            hint.Dock=DockStyle.Bottom;hint.Height=24;footer.Controls.Add(hint);
+            status=MakeLabel("Consultando Orca...",9,Faint,FontStyle.Regular);
+            status.Dock=DockStyle.Top;status.Height=32;status.Padding=new Padding(2,7,0,0);content.Controls.Add(status);
+            cards=new FlowLayoutPanel();cards.Dock=DockStyle.Fill;cards.FlowDirection=FlowDirection.TopDown;
+            cards.WrapContents=false;cards.AutoScroll=true;cards.Padding=new Padding(0,7,0,0);
+            cards.BackColor=Back;content.Controls.Add(cards);
+            cards.BringToFront();footer.BringToFront();status.BringToFront();accent.BringToFront();bar.BringToFront();
+            ShowLoading();
+        }
+        private static Label MakeLabel(string text,float size,Color fg,FontStyle style)
+        {
+            Label l=new Label();l.Text=text;l.AutoSize=false;l.ForeColor=fg;l.BackColor=Color.Transparent;
+            l.Font=new Font("Segoe UI",size,style);l.TextAlign=ContentAlignment.MiddleLeft;return l;
+        }
+        public void ShowLoading()
+        {
+            if(IsDisposed)return;
+            status.Text="Consultando cuotas disponibles...";
+            count.Text="Solo se mostraran datos que Orca confirme.";
+            cards.Controls.Clear();
+        }
+        public void ShowError(string message)
+        {
+            if(IsDisposed)return;
+            cards.Controls.Clear();
+            status.Text="No se pudieron cargar las cuotas.";
+            count.Text=message.Length>180?message.Substring(0,180):message;
+        }
+        public void Render(Dictionary<string,object> data,string filter)
+        {
+            if(IsDisposed)return;
+            cards.SuspendLayout();cards.Controls.Clear();
+            int providers=0,withNumbers=0;
+            foreach(object obj in Arr(data,"usage"))
+            {
+                Dictionary<string,object> entry=obj as Dictionary<string,object>;if(entry==null)continue;
+                string key=Text(entry,"provider");
+                if(filter.Length>0 && key!=filter)continue;
+                if(filter.Length==0 && key!="claude" && key!="codex" && key!="antigravity" && key!="gemini" && key!="opencodeGo" && key!="kimi")continue;
+                providers++;
+                if(Arr(entry,"windows").Count>0 || Arr(entry,"buckets").Count>0)withNumbers++;
+                string account="";
+                foreach(object groupObj in Arr(data,"accounts"))
+                {
+                    Dictionary<string,object> group=groupObj as Dictionary<string,object>;
+                    if(group==null || Text(group,"provider")!=key)continue;
+                    foreach(object acctObj in Arr(group,"accounts"))
+                    {
+                        Dictionary<string,object> acct=acctObj as Dictionary<string,object>;
+                        if(acct!=null && Bool(acct,"active")){account=Text(acct,"name");break;}
+                    }
+                }
+                AddProvider(entry,key,account);
+            }
+            if(providers==0)ShowError("Orca no devolvio proveedores para mostrar.");
+            else
+            {
+                status.Text="Cuota restante  ·  datos de Orca";
+                count.Text=withNumbers+" de "+providers+" proveedores tienen porcentajes disponibles."
+                    +"  ·  Consulta en esta PC";
+            }
+            cards.ResumeLayout(true);
+        }
+        private void AddProvider(Dictionary<string,object> entry,string provider,string account)
+        {
+            List<object> windows=Arr(entry,"windows");
+            List<object> buckets=Arr(entry,"buckets");
+            List<Dictionary<string,object>> rows=new List<Dictionary<string,object>>();
+            foreach(object o in windows){Dictionary<string,object>d=o as Dictionary<string,object>;if(d!=null && rows.Count<4)rows.Add(d);}
+            if(rows.Count==0)foreach(object o in buckets){Dictionary<string,object>d=o as Dictionary<string,object>;if(d!=null && rows.Count<4)rows.Add(d);}
+            int n=rows.Count;
+            Panel panel=new Panel();panel.BackColor=PanelBack;panel.Margin=new Padding(0,0,0,10);
+            panel.Width=575;panel.Height=92+(n>0?n*47:10);
+            panel.Padding=new Padding(14);
+            Label title=MakeLabel(ProviderName(provider).ToUpperInvariant(),13,Fore,FontStyle.Bold);
+            title.Location=new Point(14,8);title.Size=new Size(310,28);panel.Controls.Add(title);
+            string hint=(account.Length>0?"Cuenta: "+account:"Cuenta no identificada");
+            if(Bool(entry,"stale"))hint+="  ·  LECTURA ANTIGUA";
+            if(Text(entry,"status")!="ok")hint+="  ·  "+Text(entry,"status").ToUpperInvariant();
+            Label subtitle=MakeLabel(hint,8,Faint,FontStyle.Regular);
+            subtitle.Location=new Point(14,36);subtitle.Size=new Size(535,20);panel.Controls.Add(subtitle);
+            if(n==0)
+            {
+                Label notice=MakeLabel(Text(entry,"notice").Length>0?Text(entry,"notice"):"Sin cifras disponibles",9,Pink,FontStyle.Regular);
+                notice.Location=new Point(14,63);notice.Size=new Size(535,28);panel.Controls.Add(notice);
+            }
+            else
+            {
+                for(int i=0;i<n;i++)
+                {
+                    Dictionary<string,object> row=rows[i];
+                    string label=Text(row,"label");if(label.Length==0)label=Text(row,"name");
+                    double remaining;
+                    bool ok=Double.TryParse(Text(row,"remainingPercent"),NumberStyles.Float,CultureInfo.InvariantCulture,out remaining);
+                    if(!ok || remaining<0 || remaining>100)continue;
+                    int y=65+i*47;
+                    Label name=MakeLabel(label,9,Faint,FontStyle.Regular);name.Location=new Point(14,y);name.Size=new Size(145,21);panel.Controls.Add(name);
+                    Panel track=new Panel();track.BackColor=Color.FromArgb(46,53,70);track.Location=new Point(161,y+6);track.Size=new Size(292,9);panel.Controls.Add(track);
+                    Panel fill=new Panel();fill.BackColor=remaining<=10?Pink:Cyan;
+                    fill.Size=new Size(Math.Max(0,(int)Math.Round(292*remaining/100)),9);
+                    fill.Location=Point.Empty;track.Controls.Add(fill);
+                    Label value=MakeLabel(remaining.ToString("0.#",CultureInfo.InvariantCulture)+"%",11,remaining<=10?Pink:Cyan,FontStyle.Bold);
+                    value.TextAlign=ContentAlignment.MiddleRight;value.Location=new Point(463,y-3);value.Size=new Size(84,28);panel.Controls.Add(value);
+                    string reset=Reset(row);
+                    if(reset.Length>0){
+                        Label time=MakeLabel(reset.TrimStart(' ',','),8,Faint,FontStyle.Regular);
+                        time.Location=new Point(161,y+19);time.Size=new Size(385,19);panel.Controls.Add(time);
+                    }
+                }
+            }
+            cards.Controls.Add(panel);
+        }
+        public void Shutdown()
+        {
+            if(IsDisposed)return;
+            shuttingDown=true;
+            Close();Dispose();
+        }
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if(!shuttingDown && e.CloseReason==CloseReason.UserClosing){e.Cancel=true;Hide();return;}
+            base.OnFormClosing(e);
+        }
+    }
+
+}

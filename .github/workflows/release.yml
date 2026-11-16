@@ -1,0 +1,48 @@
+name: Release (reviewed version)
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Version must match manifest and tag
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "VERSION/tag mismatch" }
+          $orcav = (Get-Content orca-plugin/orca-plugin.json -Raw | ConvertFrom-Json).version
+          if ($v -ne $orcav) { throw "VERSION/Orca manifest mismatch" }
+      - name: Node tests
+        shell: pwsh
+        run: |
+          node --check orca-plugin/accounts.mjs
+          node --check orca-plugin/bridge-core.mjs
+          node --check orca-plugin/main.mjs
+          node --test tests/accounts.test.mjs tests/bridge.test.mjs tests/dashboard.test.mjs
+      - name: C# compile check (stub)
+        run: dotnet build tests/windows-compile/CapriBridgeCompile.csproj -c Release -v minimal
+      - name: Python static checks
+        run: |
+          python tests/check_csharp.py
+          python tests/check_voice_patterns.py
+          python tests/check_dashboard.py
+          python tests/check_public_repo.py
+      - name: Package source for installation
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          $paths = @('capri-mod','orca-plugin','tests','README.md','REPORTE_PRUEBAS.md','LICENSE','VERSION','diagnostico_windows.ps1')
+          Compress-Archive -Path $paths -DestinationPath "dist/Capri-Orca-Bridge-${{ github.ref_name }}.zip"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+          prerelease: true

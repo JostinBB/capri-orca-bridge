@@ -1,0 +1,19 @@
+# Local pairing secrets and credentials: NEVER commit
+connection.json
+**/connection.json
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+*.key
+*.token
+*.log
+node_modules/
+.orca/
+bin/
+obj/
+*.user
+*.suo
+*.zip
+.DS_Store
