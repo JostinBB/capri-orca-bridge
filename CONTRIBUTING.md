@@ -21,9 +21,12 @@ El workflow diario crea una issue cuando hay releases nuevas de `lachydotmcg/cap
 ## Release
 
 1. Adaptar código y tests; actualizar README y reporte.
-2. Actualizar `VERSION`, `orca-plugin/orca-plugin.json`, cabecera del mod y `compatibility/upstreams.json`.
-3. Esperar a CI en Linux/Windows; ejecutar pruebas reales con las aplicaciones.
-4. Crear tag anotado: `git tag -a v0.10.0 -m "Capri-Orca Bridge v0.10.0"` y `git push origin v0.10.0`.
-5. El workflow crea una release de GitHub, **prerelease** por defecto, solo si los checks del job Windows pasan.
+2. Incrementar `VERSION`, `orca-plugin/orca-plugin.json`, la cabecera del mod y `compatibility/upstreams.json` cuando corresponda.
+3. Esperar la finalización satisfactoria del CI de `main` (Node/Python/Linux y compilación Windows contra stub).
+4. `publish-after-ci.yml` vuelve a verificar los tests en Windows y publica **una prerelease por versión**, si el tag aún no existe. No crea releases sin CI en verde.
+5. Validar manualmente en instalaciones reales de Capri y Orca. La prerelease debe seguir marcada como experimental mientras esta validación no exista.
+6. El flujo `release.yml` de tags es una alternativa manual; no es necesario para la publicación normal.
+
+Las GitHub Actions usan `GITHUB_TOKEN` únicamente del repositorio; no publican tokens personales.
 
 El repositorio no puede verificarse de forma equivalente a Windows desde un contenedor Linux sin Capri/Orca.

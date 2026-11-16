@@ -26,13 +26,16 @@ La ventana se actualiza cada cinco minutos mientras permanezca visible, se ocult
 
 ## Desarrollo en GitHub
 
-El repositorio está listo para publicarse. **Para crearlo y subir todo con tu propia sesión GitHub**, instala `git` y GitHub CLI `gh`, ejecuta `gh auth login` y, desde PowerShell dentro del proyecto, `./publicar_github.ps1`. El script verifica la cuenta `JostinBB`, ejecuta las pruebas, crea `JostinBB/capri-orca-bridge` con visibilidad **public** y sube el código. No crea releases sin pruebas Windows reales y un paso de confirmación explícito. No publiques `connection.json` ni tus archivos de credenciales. La carpeta `.github/workflows` incluye:
+El código público se mantiene en **[JostinBB/capri-orca-bridge](https://github.com/JostinBB/capri-orca-bridge)**. La rama `main` contiene el puente y sus pruebas. **Este proyecto es experimental:** los tests de CI incluyen compilación C# contra un stub, que no equivale a la integración real de Capri y Orca en Windows. No publiques `connection.json` ni archivos de credenciales.
 
-- `ci.yml`: Node/Python en Linux y compilación C# **con stub** en Windows. La compilación con stub no prueba la API real de Capri.
-- `upstream-watch.yml`: consulta diariamente las releases de Capri y Orca; crea una issue cuando hay versión no revisada.
-- `release.yml`: al hacer push de un tag `vX.Y.Z`, vuelve a ejecutar pruebas Windows y crea una release marcada **prerelease** con ZIP.
+La carpeta `.github/workflows` incluye:
 
-**Importante:** el monitor no modifica código ni publica una release a ciegas. Cada actualización que cambie las APIs necesita adaptación, CI y validación real antes de etiquetar una release. Consulta `CONTRIBUTING.md`.
+- `ci.yml`: pruebas Node/Python en Linux y compilación del mod C# **contra stub** en Windows.
+- `upstream-watch.yml`: consulta diariamente las releases oficiales de Capri y Orca; abre una issue para revisión cuando detecta nuevas versiones.
+- `publish-after-ci.yml`: después de un CI satisfactorio de un commit de `main`, verifica que `VERSION` coincida con el manifiesto, repite las pruebas en Windows y crea una **prerelease** con un ZIP únicamente cuando no existe una release para esa versión.
+- `release.yml`: permite también publicar con un tag `vX.Y.Z` y pruebas Windows.
+
+**Importante:** las releases son experimentales hasta probar realmente Capri + Orca. La detección de actualizaciones no equivale a modificar el puente: para adaptar APIs se requiere un cambio de código revisado y pruebas. Consulte `CONTRIBUTING.md`.
 
 ## Instalación
 
