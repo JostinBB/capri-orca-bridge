@@ -25,31 +25,33 @@ jobs:
         with: { python-version: '3.12' }
       - name: Confirm current main, version and release absence
         id: gate
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $head = (gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha').Trim()
-          if ($head -ne $env:EXPECTED_COMMIT) {
-            Write-Host 'A newer main commit exists; the newer CI run will decide the release.'
-            "publish=false" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
-            exit 0
-          }
-          $version = (Get-Content VERSION -Raw).Trim()
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw "Invalid version: $version" }
-          $pluginVersion = (Get-Content orca-plugin/orca-plugin.json -Raw | ConvertFrom-Json).version
-          if ($version -ne $pluginVersion) { throw "Version/manifest mismatch: $version vs $pluginVersion" }
-          $tag = "v$version"
-          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release $tag already exists; not overwriting."
-            "publish=false" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
-            exit 0
-          }
-          "publish=true" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
-          "tag=$tag" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const head = context.payload.workflow_run.head_sha;
+            const { data: branch } = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+            if (branch.commit.sha !== head) {
+              core.info('A newer main commit exists; its CI run will decide the release.');
+              core.setOutput('publish', 'false');
+              return;
+            }
+            const version = fs.readFileSync('VERSION', 'utf8').trim();
+            if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw Error(`Invalid version: ${version}`);
+            const pluginVersion = JSON.parse(fs.readFileSync('orca-plugin/orca-plugin.json', 'utf8')).version;
+            if (version !== pluginVersion) throw Error(`Version/manifest mismatch: ${version} vs ${pluginVersion}`);
+            const tag = `v${version}`;
+            try {
+              await github.rest.repos.getReleaseByTag({owner, repo, tag});
+              core.info(`Release ${tag} already exists; not overwriting.`);
+              core.setOutput('publish', 'false');
+              return;
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            core.setOutput('publish', 'true');
+            core.setOutput('tag', tag);
       - name: Recheck tests and compile mod on Windows
         if: steps.gate.outputs.publish == 'true'
         shell: pwsh
@@ -76,12 +78,14 @@ jobs:
           Compress-Archive -Path $paths -DestinationPath "dist/Capri-Orca-Bridge-${{ steps.gate.outputs.tag }}.zip"
       - name: Publish experimental release
         if: steps.gate.outputs.publish == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha }}
-          TAG: ${{ steps.gate.outputs.tag }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          gh release create $env:TAG "dist/Capri-Orca-Bridge-$env:TAG.zip" --repo $env:GITHUB_REPOSITORY --target $env:EXPECTED_COMMIT --title "Capri-Orca Bridge $env:TAG (experimental)" --prerelease --notes "Pruebas Node/Python y compilacion C# contra stub en Windows aprobadas. La integracion real en Capri + Orca y el microfono de Windows requieren verificacion manual; usar bajo responsabilidad propia."
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.gate.outputs.tag }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          name: Capri-Orca Bridge ${{ steps.gate.outputs.tag }} (experimental)
+          prerelease: true
+          files: dist/*.zip
+          fail_on_unmatched_files: true
+          body: |
+            Prerelease experimental: pruebas Node/Python y compilación C# contra un stub en Windows superadas.
+            La integración real con Capri + Orca y el micrófono de Windows requiere pruebas manuales.
