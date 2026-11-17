@@ -7,7 +7,7 @@ import {makeBridge, BridgeError} from './bridge-core.mjs';
 import {createAccountCli,accountOperation} from './accounts.mjs';
 
 const MAX_BODY=32*1024;
-const BRIDGE_VERSION=1; // protocol stable; version of plugins is 0.9.0
+const BRIDGE_VERSION=1; // protocol stable; plugin version lives in the manifest
 export const pairingPath = () => path.join(process.env.LOCALAPPDATA || path.join(os.homedir(),'.local','share'),'CapriOrcaBridge','connection.json');
 const message = (res,status,payload) => {
   const body=JSON.stringify(payload);
