@@ -1,6 +1,6 @@
 // capri-mod: 1
 // id: capri-orca-bridge
-// name: Capri Orca Bridge 0.10
+// name: Capri Orca Bridge 0.10.1
 // version: 0.10.1
 // author: Proyecto independiente
 // description: Controla proyectos y agentes de Orca mediante su Plugin Host API, con voz y confirmacion. Sin clics.
