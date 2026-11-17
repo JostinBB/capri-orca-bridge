@@ -1,3 +1,5 @@
+# HISTORICAL: SHA-256 hashes from the initial v0.10.0 source snapshot only.
+# NOT valid for current main. Verify release ZIPs using the attached SHA256SUMS.txt.
 9d1f0a7b32b892c4eee5483ee387c86df0e21c7f55b630c7d9518ba29b6d3fc3  .github/workflows/ci.yml
 d9b93b2cb689cb59c54d796cbe582be67ac994134bcd007d1c5ba043760756b8  .github/workflows/publish-after-ci.yml
 390f5ea70ebfa5661b9782791498bcef0052f99be10617e30b24c52075550597  .github/workflows/release.yml

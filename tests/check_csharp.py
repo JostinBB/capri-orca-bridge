@@ -40,5 +40,5 @@ for required in ['ICapriMod','capri.Chat.Sending','capri.Brain.AddTool','capri.T
                  'MessageBox.Show','SendPrompt','agent_status','session_history','resume_session','accounts_status','select_account','ShowUsage','SelectAccount']:
  if required=='SendPrompt':continue
  assert required in s, f'missing {required}'
-assert '// version: 0.10.0' in s
+assert '// version: 0.10.1' in s
 print('PASS: C# lexer checks, metadata, method presence (NO compilation).')

@@ -1,6 +1,6 @@
-# Capri–Orca Bridge v0.10.0 — panel visual de cuotas, voz y proyectos
+# Capri–Orca Bridge v0.10.1 — panel visual de cuotas, voz y proyectos
 
-**Estado: experimental.** Esta versión superó **33/33 pruebas automatizadas Node** (HTTP real en localhost y host de Orca simulado), comprobaciones sintácticas de JavaScript y verificaciones léxicas/regex del C#. **No se ha compilado en Capri ni integrado en un Windows con Orca real**. Por tanto, el paquete no está certificado sin errores.
+**Estado: experimental.** Esta versión superó **39/39 pruebas automatizadas Node** (HTTP real en localhost y host de Orca simulado), comprobaciones sintácticas de JavaScript y verificaciones léxicas/regex del C#. **No se ha compilado en Capri ni integrado en un Windows con Orca real**. Por tanto, el paquete no está certificado sin errores.
 
 ## Arquitectura
 
@@ -11,12 +11,12 @@
 
 ## Requisitos
 
-- Windows con Capri Desktop compatible con `// requires: api 3` y Orca actualizado. Para consultar agentes por workspace se requiere **Orca Host API 1.10 o posterior**. Una versión más vieja puede iniciar el plugin pero ciertas funciones devolverán `unsupported`.
+- Windows con Capri Desktop compatible con `// requires: api 3` y Orca **v1.4.261 o posterior** (Host API 1.10). Para consultar agentes por workspace se requiere **Orca Host API 1.10 o posterior**. Una versión más vieja puede iniciar el plugin pero ciertas funciones devolverán `unsupported`.
 - Un agente ya autenticado en Orca (Codex/Claude/etc.). El plugin no aporta suscripciones, cuotas, modelos ni API keys.
 - En Orca, activa **Settings → General → Orca CLI**. Comprueba en PowerShell `orca status --json` y `orca account list --json`; no compartas el segundo resultado sin ocultar emails y metadatos privados.
 - En Windows el lector de cuentas usa primero `%LOCALAPPDATA%\Programs\Orca\resources\bin\orca.exe`; si instalaste Orca en una ubicación distinta, puedes definir `ORCA_CLI_COMMAND` como ruta absoluta a su ejecutable CLI (no `.cmd`). Sin CLI funcional el control habitual de sesiones continúa; solo falla la consulta/cambio de cuentas.
 
-## Nuevo en v0.10.0: ventana de cuotas estilo Capri
+## Introducido en v0.10.0: ventana de cuotas estilo Capri
 
 Puedes decir **«Capri, muestra mis cuotas»** (o **«Capri, show my quotas»**) para abrir una ventana flotante oscura con detalles en cian y rosa, barras de porcentaje por proveedor y ventanas de uso. **«Capri, oculta mis cuotas»** la esconde. No se simulan clics ni se crea otro motor de voz. La ventana utiliza el reconocimiento ya disponible en Capri y se muestra solo en tu PC.
 
@@ -35,11 +35,13 @@ La carpeta `.github/workflows` incluye:
 - `publish-after-ci.yml`: después de un CI satisfactorio de un commit de `main`, verifica que `VERSION` coincida con el manifiesto, repite las pruebas en Windows y crea una **prerelease** con un ZIP únicamente cuando no existe una release para esa versión.
 - `release.yml`: permite también publicar con un tag `vX.Y.Z` y pruebas Windows.
 
+Para verificar una descarga, compara el SHA-256 del ZIP con `SHA256SUMS.txt`, publicado junto al artefacto de cada nueva release (en PowerShell: `Get-FileHash archivo.zip -Algorithm SHA256`). El `CHECKSUMS.sha256` de la raíz corresponde solo al estado inicial de v0.10.0, no a la rama actual.
+
 **Importante:** las releases son experimentales hasta probar realmente Capri + Orca. La detección de actualizaciones no equivale a modificar el puente: para adaptar APIs se requiere un cambio de código revisado y pruebas. Consulte `CONTRIBUTING.md`.
 
 ## Instalación
 
-1. Desactiva y retira **v0.9** de Capri y Orca antes de activar v0.10.0, para evitar dos servidores o dos interceptores de comandos.
+1. Desactiva y retira **v0.9** de Capri y Orca antes de activar v0.10.1, para evitar dos servidores o dos interceptores de comandos.
 2. Extrae todo el ZIP en una carpeta permanente, por ejemplo `C:\CapriOrcaBridge-v010`.
 3. En Orca: **Settings → Plugins → Development folders…** → añade la subcarpeta `orca-plugin`. Revisa y acepta los permisos del worker. Si tienes la CLI habilitada puedes verificar primero con `orca plugin validate C:\CapriOrcaBridge-v010\orca-plugin`.
 4. En Capri: **Mainframe → CAPRI → Mods → Import mod** → importa el archivo `capri-mod\capri-orca-bridge.capri-code`. Lee la advertencia antes de autorizarlo.
@@ -80,11 +82,11 @@ Orca publica `usedPercent`: el puente calcula **`remainingPercent = 100 - usedPe
 
 Orca **sí** ofrece en su interfaz nativa la función **Hand Off to Another Agent**: crea otra sesión e introduce un **contexto de traspaso acotado**, obtenido del historial/contexto que Orca puede capturar. No es garantía de copiar todo el historial sin límites. En la versión consultada de **Orca Plugin Host API** **no existe** una función pública `agent.handoff` ni otra llamada documentada que asegure ejecutar por programa esa transferencia integral.
 
-Por tanto v0.10.0 **NO afirma haber automatizado el traspaso completo**. Si dices «transfiere todo el contexto», Capri avisa de esta limitación y no crea una nueva sesión con un resumen truncado haciéndolo pasar por el historial completo. Para transferir manualmente, usa **Hand Off to Another Agent** en la cabecera o menú de la sesión principal dentro de Orca.
+Por tanto v0.10.1 **NO afirma haber automatizado el traspaso completo**. Si dices «transfiere todo el contexto», Capri avisa de esta limitación y no crea una nueva sesión con un resumen truncado haciéndolo pasar por el historial completo. Para transferir manualmente, usa **Hand Off to Another Agent** en la cabecera o menú de la sesión principal dentro de Orca.
 
 La API de plugins tampoco expone enviar prompts a toda sesión **Chat UI**. El puente usa `terminal.sendText` solamente cuando Orca identifica una terminal real, no confunde dos agentes del mismo tipo y exige elegir destino si hay varias coincidencias. Para sesiones Chat UI, el usuario puede usar el Chat nativo de Orca.
 
-## Correcciones posteriores a v0.10.0 (pendientes de nueva versión)
+## Correcciones incluidas en v0.10.1
 
 - La consulta de cuotas considera **antiguos** los datos si Orca informa `error`, `idle`, `fetching` o `unavailable`, incluso cuando devuelve un porcentaje guardado con una fecha reciente. El porcentaje de caché puede mostrarse como referencia, pero **no sirve como saldo confirmado** ni para avisos de límite agotado.
 - Al lanzar un agente, el puente exige que la Host API devuelva un `terminalId` válido antes de informar éxito. No reintenta lanzamientos de respuesta incierta, evitando ejecuciones duplicadas.
@@ -115,7 +117,7 @@ python .\tests\check_voice_patterns.py
 
 El código completo de pruebas y resultados está en `REPORTE_PRUEBAS.md`. La sintaxis estática de C# **NO reemplaza el compilador de Capri**. Para errores reales consulta `%LOCALAPPDATA%\Capri\errors.txt` y `orca plugin logs local.capri-bridge`.
 
-## Fuentes oficiales consultadas (16 noviembre 2026)
+## Fuentes oficiales consultadas (17 noviembre 2026)
 
 - [Capri Mod API](https://github.com/lachydotmcg/capri-desktop/blob/main/mods/MODDING.md)
 - [Orca Host API](https://github.com/stablyai/orca/blob/main/docs/reference/plugin-host-api.md)

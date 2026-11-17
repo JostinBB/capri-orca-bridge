@@ -64,7 +64,7 @@ export function makeBridge(orca, accountCli) {
     }
     if (!p || typeof p!=='object' || Array.isArray(p)) throw new BridgeError('invalid_params','params debe ser un objeto');
     switch(op) {
-      case 'ping': return {bridge:'0.10.0',accounts:!!accountCli,hostApi:orca.api,capabilities:{projects:has('project.list'),sessions:has('agent.listSessions'),resuming:has('agent.resume'),agentScope:(orca.api?.minor||0)>=10}};
+      case 'ping': return {bridge:'0.10.1',accounts:!!accountCli,hostApi:orca.api,capabilities:{projects:has('project.list'),sessions:has('agent.listSessions'),resuming:has('agent.resume'),agentScope:(orca.api?.minor||0)>=10}};
       case 'projects': {
         const ws = await workspaces();
         const projects = has('project.list') ? await api('project.list',{}) : {projects:[]};

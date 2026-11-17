@@ -3,9 +3,9 @@
   "execution": "trusted-worker",
   "id": "capri-bridge",
   "name": "Capri-Orca Bridge",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Conector local autenticado entre Capri Desktop y la API de Orca. No simula clics.",
-  "engines": {"orca": ">=1.4.248"},
+  "engines": {"orca": ">=1.4.261"},
   "pluginApi": 1,
   "main": "main.mjs",
   "contributes": {
