@@ -35,7 +35,9 @@ export function describeRateLimit(raw) {
   if(status!=='ok')notice=safe(raw.error)|| (status==='fetching'?'Consultando cuota':status==='idle'?'Cuota no consultada':'Datos de cuota no disponibles');
   if(status==='ok' && windows.length===0 && buckets.length===0)notice='Orca no devuelve porcentajes para este proveedor';
   const updatedAt=numbersOnly(raw.updatedAt);
-  const stale=updatedAt===null || Date.now()-updatedAt>30*60*1000;
+  const now=Date.now();
+  // A future-dated observation cannot be trusted as fresh (clock skew or malformed CLI data).
+  const stale=updatedAt===null || updatedAt>now+60_000 || now-updatedAt>30*60*1000;
   return {status,updatedAt,stale,windows,buckets,notice,planType:safe(raw.planType),
     extraUsage:(isObject(raw.extraUsage) && raw.extraUsage.enabled===true)?{unit:raw.extraUsage.unit, balance:Number.isFinite(raw.extraUsage.balance)?raw.extraUsage.balance:null}:null};
 }
