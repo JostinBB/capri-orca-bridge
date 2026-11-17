@@ -24,10 +24,11 @@ export function makeBridge(orca, accountCli) {
     if (!entry) throw new BridgeError('not_found', 'Ese workspace ya no existe. Vuelve a listar proyectos.');
     return entry;
   };
-  const validAgents = new Set(['claude','codex','antigravity','gemini','opencode','pi','grok','qwen-code','copilot','cursor','kimi','droid','kiro','hermes','qoder','codebuddy','muse','devin','opencode2']);
+  // Sync with the documented Orca Host API agent identifiers; actual launches still require Orca support.
+  const validAgents = new Set(['claude','codex','antigravity','gemini','opencode','pi','grok','qwen-code','copilot','cursor','kimi','droid','kiro','hermes','qoder','qoder-cn','codebuddy','muse','devin','opencode2','mimo-code','zcode','omp','prime-agent','dsh','jcode']);
   const validateAgent = value => {
     const agent=required(value,'agent',80).toLowerCase().replace(/\s+/g,'');
-    const normalized=agent==='claudecode'?'claude':agent;
+    const normalized=({claudecode:'claude',mimocode:'mimo-code',primeagent:'prime-agent',qodercn:'qoder-cn',qwencode:'qwen-code'})[agent]||agent;
     if(!validAgents.has(normalized)) throw new BridgeError('invalid_params','Agente desconocido o no admitido por el puente');
     return normalized;
   };
@@ -115,6 +116,7 @@ export function makeBridge(orca, accountCli) {
         const agent=validateAgent(p.agent);
         if (p.prompt && !capText(p.prompt,12000)) throw new BridgeError('invalid_params','Prompt no valido');
         const result=await api('agent.launch',{workspaceId:ws.id,agent,...(p.prompt?{prompt:p.prompt}:{})});
+        if(!isString(result?.terminalId)) throw new BridgeError('not_accepted','Orca no devolvio una terminal valida; no se confirma el lanzamiento ni se reintenta');
         return {launched:true,terminalId:result.terminalId,workspaceId:ws.id,agent,notice:'Orca inicio una nueva terminal del agente; no es una sesion Chat UI.'};
       }
       case 'session_history': {
