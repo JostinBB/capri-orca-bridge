@@ -5,7 +5,7 @@ assert 'class QuotaDashboard : Form' in s
 assert 'private void HideUsage()' in s
 assert 'private void ReadUsage(' in s
 assert 'quotaDashboard.Render(result,provider)' in s
-assert '// version: 0.10.0' in s
+assert '// version: 0.10.1' in s
 # These simulate the prefix/verb vocabulary in C# after accents and punctuation are normalized.
 show=re.compile(r'^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:muestra|mostrar|abre|abrir|ensena|despliega|show|display)\s+(?:(?:mis|las|my)\s+)?(?:cuotas|quota|quotas|usage)$')
 hide=re.compile(r'^(?:capri\s+)?(?:(?:en\s+)?orca\s+)?(?:oculta|ocultar|esconde|esconder|cierra|cerrar|hide|close)\s+(?:(?:mis|las|my)\s+)?(?:cuotas|quota|quotas|usage)$')
