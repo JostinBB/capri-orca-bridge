@@ -21,7 +21,7 @@ const windowSummary = value => {
   };
 };
 export function describeRateLimit(raw) {
-  if(!isObject(raw)) return {status:'unavailable',updatedAt:null,windows:[],buckets:[],notice:'Orca no informa la cuota'};
+  if(!isObject(raw)) return {status:'unavailable',updatedAt:null,stale:true,windows:[],buckets:[],notice:'Orca no informa la cuota'};
   const status=['ok','error','unavailable','idle','fetching'].includes(raw.status)?raw.status:'unavailable';
   const windows=[];
   for(const [id,label] of [['session','5 horas'],['weekly','semanal'],['fableWeekly','Fable semanal'],['monthly','mensual']]) {
@@ -37,7 +37,8 @@ export function describeRateLimit(raw) {
   const updatedAt=numbersOnly(raw.updatedAt);
   const now=Date.now();
   // A future-dated observation cannot be trusted as fresh (clock skew or malformed CLI data).
-  const stale=updatedAt===null || updatedAt>now+60_000 || now-updatedAt>30*60*1000;
+  // A failed, idle or in-progress fetch must never make cached percentages appear current.
+  const stale=status!=='ok' || updatedAt===null || updatedAt>now+60_000 || now-updatedAt>30*60*1000;
   return {status,updatedAt,stale,windows,buckets,notice,planType:safe(raw.planType),
     extraUsage:(isObject(raw.extraUsage) && raw.extraUsage.enabled===true)?{unit:raw.extraUsage.unit, balance:Number.isFinite(raw.extraUsage.balance)?raw.extraUsage.balance:null}:null};
 }
