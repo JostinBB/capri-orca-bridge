@@ -84,6 +84,13 @@ Por tanto v0.10.0 **NO afirma haber automatizado el traspaso completo**. Si dice
 
 La API de plugins tampoco expone enviar prompts a toda sesión **Chat UI**. El puente usa `terminal.sendText` solamente cuando Orca identifica una terminal real, no confunde dos agentes del mismo tipo y exige elegir destino si hay varias coincidencias. Para sesiones Chat UI, el usuario puede usar el Chat nativo de Orca.
 
+## Correcciones posteriores a v0.10.0 (pendientes de nueva versión)
+
+- La consulta de cuotas considera **antiguos** los datos si Orca informa `error`, `idle`, `fetching` o `unavailable`, incluso cuando devuelve un porcentaje guardado con una fecha reciente. El porcentaje de caché puede mostrarse como referencia, pero **no sirve como saldo confirmado** ni para avisos de límite agotado.
+- Al lanzar un agente, el puente exige que la Host API devuelva un `terminalId` válido antes de informar éxito. No reintenta lanzamientos de respuesta incierta, evitando ejecuciones duplicadas.
+- Se admiten además identificadores documentados por Orca como `mimo-code`, `prime-agent`, `qoder-cn`, `zcode`, `omp`, `dsh` y `jcode`. Las variantes habladas «Mimo Code» y «Prime Agent» se normalizan. Que Orca documente un identificador **no significa** que ese agente esté instalado o autenticado.
+- Revisadas las notas de Capri v0.9.3.1 (cambios en la búsqueda web y el antivirus de Windows) y la referencia Orca Host API 1.10, sin afirmar validación de integración real en Windows.
+
 ## Verificación y diagnóstico
 
 Desde la carpeta raíz:
