@@ -38,11 +38,9 @@ jobs:
       - name: Package source for installation
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path dist | Out-Null
-          $paths = @('capri-mod','orca-plugin','tests','README.md','REPORTE_PRUEBAS.md','LICENSE','VERSION','diagnostico_windows.ps1')
-          Compress-Archive -Path $paths -DestinationPath "dist/Capri-Orca-Bridge-${{ github.ref_name }}.zip"
+          ./tools/package.ps1 -Tag "${{ github.ref_name }}" -OutputDir dist
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: dist/*
           generate_release_notes: true
           prerelease: true
