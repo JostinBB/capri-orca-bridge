@@ -26,7 +26,7 @@ jobs:
           node --check orca-plugin/accounts.mjs
           node --check orca-plugin/bridge-core.mjs
           node --check orca-plugin/main.mjs
-          node --test tests/accounts.test.mjs tests/bridge.test.mjs tests/dashboard.test.mjs
+          node --test tests/accounts.test.mjs tests/bridge.test.mjs tests/dashboard.test.mjs tests/version.test.mjs
       - name: C# compile check (stub)
         run: dotnet build tests/windows-compile/CapriBridgeCompile.csproj -c Release -v minimal
       - name: Python static checks
