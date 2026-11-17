@@ -190,3 +190,22 @@ test('no realiza envios si el host informa accepted false',async()=>{
  await promiseError(()=>makeBridge(orca).dispatch('send_prompt',{workspaceId:'wt-ventas',agent:'claude',prompt:'Revisar'}),'not_accepted');
  assert.equal(calls.some(x=>x.m==='terminal.sendText'),false);
 });
+
+test('acepta identificadores actuales y nombres hablados sin lanzar agentes desconocidos',async()=>{
+ const {orca,calls}=mock();const bridge=makeBridge(orca);
+ const r=await bridge.dispatch('launch_agent',{workspaceId:'wt-ventas',agent:'Prime Agent',prompt:'Revisa el codigo'});
+ assert.equal(r.launched,true);assert.equal(r.terminalId,'t-new');
+ assert.equal(calls.at(-1).p.agent,'prime-agent');
+ const r2=await bridge.dispatch('launch_agent',{workspaceId:'wt-ventas',agent:'Mimo Code'});
+ assert.equal(r2.agent,'mimo-code');
+ const before=calls.filter(x=>x.m==='agent.launch').length;
+ await promiseError(()=>bridge.dispatch('launch_agent',{workspaceId:'wt-ventas',agent:'agente-desconocido'}),'invalid_params');
+ assert.equal(calls.filter(x=>x.m==='agent.launch').length,before);
+});
+
+test('no afirma inicio de agente si Host API no devuelve terminalId',async()=>{
+ const {orca}=mock();const original=orca.host.call;
+ orca.host.call=async(m,p)=>m==='agent.launch'?{}:original(m,p);
+ const bridge=makeBridge(orca);
+ await promiseError(()=>bridge.dispatch('launch_agent',{workspaceId:'wt-ventas',agent:'codex'}),'not_accepted');
+});
