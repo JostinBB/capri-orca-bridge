@@ -130,3 +130,14 @@ test('invoca un CLI de prueba como proceso real sin shell, lee JSON auténtico',
    assert.equal(summarizeAccountSnapshot(result).usage.find(x=>x.provider==='claude').windows[0].remainingPercent,31);
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 });
+
+test('marca como antigua una lectura de cuota fechada en el futuro',()=>{
+ const now=Date.now();
+ const future=describeRateLimit({status:'ok',updatedAt:now+60*60*1000,session:window(20)});
+ assert.equal(future.stale,true);
+ assert.equal(future.windows[0].remainingPercent,80);
+ const current=describeRateLimit({status:'ok',updatedAt:now,session:window(20)});
+ assert.equal(current.stale,false);
+ const old=describeRateLimit({status:'ok',updatedAt:now-31*60*1000,session:window(20)});
+ assert.equal(old.stale,true);
+});
