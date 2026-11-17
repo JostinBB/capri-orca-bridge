@@ -1,28 +1,32 @@
-# Reporte de pruebas — Capri-Orca Bridge v0.10.0
+# Reporte de pruebas — Capri-Orca Bridge v0.10.1
 
-Fecha: 16/11/2026.
+Fecha de revisión: 17/11/2026.
 
-## Ejecutado en este entorno
+## Evidencia automatizada en GitHub Actions
 
-- **33/33 tests Node** aprobados: HTTP localhost real, control de autenticación, idempotencia, selección de proyecto/agente, cuotas y JSON, rutas y prueba estructural del nuevo panel.
-- **4 verificaciones Python**: `check_csharp.py`, `check_voice_patterns.py`, `check_dashboard.py`, `check_public_repo.py` aprobadas.
-- `node --check` pasó en `orca-plugin/main.mjs`, `bridge-core.mjs`, `accounts.mjs`.
-- Se comprobó que el proyecto público no incluye `connection.json` ni claves privadas.
+- **37/37 tests Node aprobados**, 0 fallos, en [CI del PR #6](https://github.com/JostinBB/capri-orca-bridge/actions/runs/44096783777). Incluyen servidor HTTP real en loopback, autenticación, idempotencia, manejo de cuotas, validación de agentes y pruebas estructurales del panel.
+- **4 verificaciones Python** aprobadas: `check_csharp.py`, `check_voice_patterns.py`, `check_dashboard.py`, `check_public_repo.py`.
+- `node --check` aprobado para los módulos JavaScript del plugin.
+- **Compilación C# en runner Windows contra stub** aprobada. Valida tipos y sintaxis previstos por el stub, no la integración con Capri real.
+- Los resultados definitivos de v0.10.1 deben consultarse en el CI del commit de esta versión y en el flujo de publicación. El PR #6 valida el cambio funcional previo, no sustituye la validación del nuevo empaquetado.
 
-## Pruebas que **NO** se han realizado
+## Pruebas que NO se han realizado
 
-- Compilación C# en Windows/Capri real (no hay .NET, csc ni Windows en este entorno).
-- Validación de manifest por el binario Orca real; la integración HTTP del servidor utilizó una Host API simulada.
-- Apertura visual del formulario WinForms ni pruebas de interacción con el micrófono.
-- Cuentas reales Claude, Codex, Antigravity y sus cuotas.
-- Verificación de `gh repo create` y workflows sobre el GitHub del usuario; todavía no existe el repo.
+- Compilación del mod contra ensamblados reales de Capri en Windows.
+- Validación de manifest y llamadas de Host API con Orca ejecutándose en un dispositivo real.
+- Visualización e interacción del panel WinForms y uso de micrófono o interrupciones por voz.
+- Consultas de cuotas en cuentas reales de Claude, Codex y Antigravity.
+- Traspaso de contexto integral de Chat UI a otras sesiones (Host API no expone esa garantía).
 
-La carpeta `tests/windows-compile/` incorpora compilación sintáctica C# con stub en GitHub Actions para el futuro; **no** equivale a compilar con Capri en el equipo.
+## Riesgos conocidos y alcance
 
-## Riesgos conocidos
+- Las cuotas sin lectura válida o actual se marcan como no confirmadas; no se calculan tokens inventados.
+- `terminal.sendText` solo alcanza terminales verificadas; no permite enviar a una sesión Chat UI por sí mismo.
+- El handoff nativo de Orca no tiene contrato público de automatización integral en la Host API 1.10.
+- El panel usa Windows Forms: el mod no es compatible con Mac/Linux de manera demostrada.
+- Una prerelease indica pruebas automatizadas, NO certificación con el escritorio, agentes y micrófono reales.
 
-- El sistema de voz de Capri depende de su configuración de micrófono y reconocimiento.
-- Las cuotas pueden ser antiguas/no disponibles; el panel las marca y no inventa números.
-- El traspaso nativo de contexto a otro agente no está expuesto por la Host API pública. No se automatiza ni promete copiar todo el historial.
-- Sesiones Chat UI no son todas enviables mediante `terminal.sendText`.
-- El panel WinForms se diseñó para Windows. Es intencional y el mod no está preparado para Mac/Linux.
+## Versiones fuente revisadas
+
+- [Capri Desktop v0.9.3.1](https://github.com/lachydotmcg/capri-desktop/releases/tag/v0.9.3.1): referencia de mod C# `// requires: api 3`.
+- [Orca v1.4.261](https://github.com/stablyai/orca/releases/tag/v1.4.261): referencia Host API 1.10 y `agent.launch`.
