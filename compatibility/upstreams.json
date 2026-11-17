@@ -1,11 +1,20 @@
 {
   "capri": {
     "repository": "lachydotmcg/capri-desktop",
-    "reviewedRelease": null
+    "reviewedRelease": "v0.9.3.1",
+    "reviewedFile": "mods/MODDING.md",
+    "requiredModApi": 3
   },
   "orca": {
     "repository": "stablyai/orca",
-    "reviewedRelease": null
+    "reviewedRelease": "v1.4.261",
+    "reviewedFile": "docs/reference/plugin-host-api.md",
+    "reviewedHostApi": "1.10"
   },
-  "note": "reviewedRelease solo se actualiza después de revisar API y pasar pruebas; null no asegura compatibilidad."
+  "validation": {
+    "nodeCI": "mock Host API and real loopback HTTP",
+    "windows": "C# compile against contract stub only",
+    "realDesktopIntegrationVerified": false
+  },
+  "note": "Revisión de documentación y pruebas automatizadas; reviewedRelease NO significa compatibilidad verificada en Windows real."
 }
