@@ -73,9 +73,7 @@ jobs:
         if: steps.gate.outputs.publish == 'true'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          $paths = @('capri-mod','orca-plugin','tests','README.md','REPORTE_PRUEBAS.md','LICENSE','VERSION','diagnostico_windows.ps1')
-          Compress-Archive -Path $paths -DestinationPath "dist/Capri-Orca-Bridge-${{ steps.gate.outputs.tag }}.zip"
+          ./tools/package.ps1 -Tag "${{ steps.gate.outputs.tag }}" -OutputDir dist
       - name: Publish experimental release
         if: steps.gate.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
@@ -84,7 +82,7 @@ jobs:
           target_commitish: ${{ github.event.workflow_run.head_sha }}
           name: Capri-Orca Bridge ${{ steps.gate.outputs.tag }} (experimental)
           prerelease: true
-          files: dist/*.zip
+          files: dist/*
           fail_on_unmatched_files: true
           body: |
             Prerelease experimental: pruebas Node/Python y compilación C# contra un stub en Windows superadas.
