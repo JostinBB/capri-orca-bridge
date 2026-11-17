@@ -89,7 +89,7 @@ test('HTTP autentificado en loopback, bloqueo duplicados y apagado limpia la con
   });
   const unauthorized=await send('invalid','ping');assert.equal(unauthorized.status,401);
   const forbidden=await send(connection.token,'ping',{},'abcdef123456','http://attacker.test');assert.equal(forbidden.status,403);
-  const ping=await send(connection.token,'ping');assert.equal(ping.response.result.bridge,'0.9.0');
+  const ping=await send(connection.token,'ping');assert.equal(ping.response.result.bridge,'0.10.0');
   const action={workspaceId:'wt-ventas',agent:'claude',prompt:'test'};
   const first=await send(connection.token,'send_prompt',action,'same123456789');assert.equal(first.response.ok,true);
   const second=await send(connection.token,'send_prompt',action,'same123456789');assert.equal(second.response.error.code,'duplicate');
