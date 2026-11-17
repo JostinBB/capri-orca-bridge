@@ -141,3 +141,15 @@ test('marca como antigua una lectura de cuota fechada en el futuro',()=>{
  const old=describeRateLimit({status:'ok',updatedAt:now-31*60*1000,session:window(20)});
  assert.equal(old.stale,true);
 });
+
+test('una cuota no confirmada nunca se presenta como lectura vigente',()=>{
+ const now=Date.now();
+ for(const status of ['error','unavailable','idle','fetching']) {
+   const reading=describeRateLimit({status,updatedAt:now,session:window(30)});
+   assert.equal(reading.stale,true,status);
+   assert.equal(reading.windows[0].remainingPercent,70);
+ }
+ assert.equal(describeRateLimit(null).stale,true);
+ const valid=describeRateLimit({status:'ok',updatedAt:now,session:window(30)});
+ assert.equal(valid.stale,false);
+});
