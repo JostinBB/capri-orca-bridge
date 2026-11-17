@@ -1,6 +1,6 @@
 # Capri–Orca Bridge v0.10.1 — panel visual de cuotas, voz y proyectos
 
-**Estado: experimental.** Esta versión superó **37/37 pruebas automatizadas Node** (HTTP real en localhost y host de Orca simulado), comprobaciones sintácticas de JavaScript y verificaciones léxicas/regex del C#. **No se ha compilado en Capri ni integrado en un Windows con Orca real**. Por tanto, el paquete no está certificado sin errores.
+**Estado: experimental.** Esta versión superó **39/39 pruebas automatizadas Node** (HTTP real en localhost y host de Orca simulado), comprobaciones sintácticas de JavaScript y verificaciones léxicas/regex del C#. **No se ha compilado en Capri ni integrado en un Windows con Orca real**. Por tanto, el paquete no está certificado sin errores.
 
 ## Arquitectura
 
