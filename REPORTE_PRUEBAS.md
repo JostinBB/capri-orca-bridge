@@ -4,11 +4,12 @@ Fecha de revisión: 17/11/2026.
 
 ## Evidencia automatizada en GitHub Actions
 
-- **37/37 tests Node aprobados**, 0 fallos, en [CI del PR #6](https://github.com/JostinBB/capri-orca-bridge/actions/runs/44096783777). Incluyen servidor HTTP real en loopback, autenticación, idempotencia, manejo de cuotas, validación de agentes y pruebas estructurales del panel.
+- **39/39 tests Node aprobados**, 0 fallos, en [CI del PR #7](https://github.com/JostinBB/capri-orca-bridge/actions/runs/44098013334). Incluyen servidor HTTP real en loopback, autenticación, idempotencia, manejo de cuotas, validación de agentes y pruebas estructurales del panel.
 - **4 verificaciones Python** aprobadas: `check_csharp.py`, `check_voice_patterns.py`, `check_dashboard.py`, `check_public_repo.py`.
 - `node --check` aprobado para los módulos JavaScript del plugin.
 - **Compilación C# en runner Windows contra stub** aprobada. Valida tipos y sintaxis previstos por el stub, no la integración con Capri real.
-- Los resultados definitivos de v0.10.1 deben consultarse en el CI del commit de esta versión y en el flujo de publicación. El PR #6 valida el cambio funcional previo, no sustituye la validación del nuevo empaquetado.
+- **Paquete ZIP verificado en runner Windows**: se comprobaron los archivos fundamentales y el SHA-256 generado se verificó contra el ZIP. El empaquetado utiliza `tools/package.ps1`.
+- La release definitiva de v0.10.1 requiere además pasar el CI del commit fusionado en `main` y el flujo de publicación. El PR #7 acredita las pruebas de la rama, no integración con dispositivos reales.
 
 ## Pruebas que NO se han realizado
 
