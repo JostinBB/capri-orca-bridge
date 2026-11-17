@@ -40,7 +40,7 @@ jobs:
           $v = (Get-Content VERSION -Raw).Trim()
           ./tools/package.ps1 -Tag "v$v" -OutputDir dist
           $zip = "dist/Capri-Orca-Bridge-v$v.zip"
-          $expected = ((Get-Content dist/SHA256SUMS.txt -Raw).Trim() -split '\\s+')[0]
+          $expected = ((Get-Content dist/SHA256SUMS.txt -Raw).Trim() -split '\s+')[0]
           $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($expected -ne $actual) { throw 'Release ZIP SHA-256 mismatch' }
 
