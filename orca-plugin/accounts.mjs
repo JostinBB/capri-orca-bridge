@@ -59,7 +59,7 @@ const makeAccountRows = (snapshot, provider) => {
       const inactive=Array.isArray(cached)?cached.find(x=>x?.accountId===row.id):null;
       if(inactive?.rateLimits)row.usage=describeRateLimit(inactive.rateLimits);
       else if(provider==='antigravity')row.usage=describeRateLimit(list.find(x=>x?.id===row.id)?.usage);
-      else row.usage={status:'unavailable',updatedAt:null,windows:[],buckets:[],notice:'Sin lectura de cuota de esta cuenta'};
+      else row.usage=describeRateLimit(null);
     }
   }
   return rows;
