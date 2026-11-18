@@ -153,3 +153,15 @@ test('una cuota no confirmada nunca se presenta como lectura vigente',()=>{
  const valid=describeRateLimit({status:'ok',updatedAt:now,session:window(30)});
  assert.equal(valid.stale,false);
 });
+
+test('ignora entradas nulas o malformadas de cuentas sin romper las cuotas',()=>{
+ const snapshot=fixture();
+ snapshot.result.claude.accounts.unshift(null,42,'corrupto',[]);
+ snapshot.result.codex.accounts.push(null);
+ const result=summarizeAccountSnapshot(snapshot);
+ const claude=result.accounts.find(x=>x.provider==='claude').accounts;
+ assert.equal(claude.length,2);
+ assert.equal(claude[0].active,true);
+ assert.equal(claude[1].usage.windows[0].remainingPercent,81);
+ assert.equal(result.accounts.find(x=>x.provider==='codex').accounts.length,2);
+});
