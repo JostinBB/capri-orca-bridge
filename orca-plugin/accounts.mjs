@@ -47,7 +47,7 @@ const makeAccountRows = (snapshot, provider) => {
   const root=isObject(snapshot?.[provider])?snapshot[provider]:{};
   const list=Array.isArray(root.accounts)?root.accounts:[];
   const activeId=root.activeAccountIdsByRuntime?.host ?? root.activeAccountId ?? null;
-  const rows=list.map(x=>({...safeAccount(x),active:x.id===activeId}));
+  const rows=list.filter(isObject).map(x=>({...safeAccount(x),active:typeof x.id==='string' && x.id===activeId}));
   if((provider==='claude'||provider==='codex') && activeId===null) {
     rows.unshift({id:'system',name:'Cuenta predeterminada',needsSignIn:false,active:true});
   }
