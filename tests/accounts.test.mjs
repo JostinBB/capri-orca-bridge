@@ -153,3 +153,14 @@ test('una cuota no confirmada nunca se presenta como lectura vigente',()=>{
  const valid=describeRateLimit({status:'ok',updatedAt:now,session:window(30)});
  assert.equal(valid.stale,false);
 });
+
+test('cuentas inactivas sin datos no se presentan como cuotas vigentes',()=>{
+ const snapshot=fixture();
+ snapshot.result.claude.accounts.push({id:'acct-claude-3',displayName:'Sin lectura'});
+ const out=summarizeAccountSnapshot(snapshot);
+ const row=out.accounts.find(x=>x.provider==='claude').accounts.find(x=>x.id==='acct-claude-3');
+ assert.equal(row.usage.status,'unavailable');
+ assert.equal(row.usage.stale,true);
+ assert.deepEqual(row.usage.windows,[]);
+ assert.equal(row.usage.updatedAt,null);
+});
