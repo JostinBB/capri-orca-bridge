@@ -153,3 +153,13 @@ test('una cuota no confirmada nunca se presenta como lectura vigente',()=>{
  const valid=describeRateLimit({status:'ok',updatedAt:now,session:window(30)});
  assert.equal(valid.stale,false);
 });
+
+test('cuota ok sin ventanas ni buckets no se anuncia como fresca',()=>{
+ const reading=describeRateLimit({status:'ok',updatedAt:Date.now(),session:null,weekly:null,buckets:[]});
+ assert.equal(reading.stale,true);
+ assert.equal(reading.windows.length,0);
+ assert.equal(reading.buckets.length,0);
+ assert.match(reading.notice,/no devuelve porcentajes/i);
+ const valid=describeRateLimit({status:'ok',updatedAt:Date.now(),session:window(20)});
+ assert.equal(valid.stale,false);
+});
