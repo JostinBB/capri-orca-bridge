@@ -38,7 +38,7 @@ export function describeRateLimit(raw) {
   const now=Date.now();
   // A future-dated observation cannot be trusted as fresh (clock skew or malformed CLI data).
   // A failed, idle or in-progress fetch must never make cached percentages appear current.
-  const stale=status!=='ok' || updatedAt===null || updatedAt>now+60_000 || now-updatedAt>30*60*1000;
+  const stale=status!=='ok' || (windows.length===0 && buckets.length===0) || updatedAt===null || updatedAt>now+60_000 || now-updatedAt>30*60*1000;
   return {status,updatedAt,stale,windows,buckets,notice,planType:safe(raw.planType),
     extraUsage:(isObject(raw.extraUsage) && raw.extraUsage.enabled===true)?{unit:raw.extraUsage.unit, balance:Number.isFinite(raw.extraUsage.balance)?raw.extraUsage.balance:null}:null};
 }
