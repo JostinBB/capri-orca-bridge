@@ -153,3 +153,14 @@ test('una cuota no confirmada nunca se presenta como lectura vigente',()=>{
  const valid=describeRateLimit({status:'ok',updatedAt:now,session:window(30)});
  assert.equal(valid.stale,false);
 });
+
+
+test('extraUsage unit never exposes nested CLI objects and is bounded',()=>{
+ const now=Date.now();
+ const injected=describeRateLimit({status:'ok',updatedAt:now,session:{usedPercent:50},extraUsage:{enabled:true,unit:{token:'PRIVATE_SECRET',nested:{key:'x'}},balance:4}});
+ assert.equal(injected.extraUsage.unit,null);
+ assert.equal(JSON.stringify(injected).includes('PRIVATE_SECRET'),false);
+ const long=describeRateLimit({status:'ok',updatedAt:now,session:{usedPercent:50},extraUsage:{enabled:true,unit:'A'.repeat(500),balance:2}});
+ assert.equal(long.extraUsage.unit.length,160);
+ assert.equal(long.extraUsage.balance,2);
+});
