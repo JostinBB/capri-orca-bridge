@@ -68,7 +68,7 @@ Para detener el seguimiento de cuotas di «Capri, deja de vigilar mis cuotas». 
 
 Hay comandos equivalentes básicos en inglés; el reconocimiento real depende de la configuración de Capri. No instalamos otra voz ni usamos el micrófono de Orca dentro del plugin. La interrupción acústica (*barge-in*) la realiza Capri: `BargeIn` / `OverHerLocally` en su código fuente. Interrumpir la voz **no cancela el trabajo** del agente.
 
-## Cómo leer los porcentajes
+**Seguridad de los metadatos de cuotas:** el puente limita `extraUsage.unit` a texto de hasta 160 caracteres; si Orca devuelve un objeto en ese campo, se descarta para evitar incluir estructuras internas en la respuesta local. Las cuotas se obtienen de Orca, no se inventan.\n\n## Cómo leer los porcentajes
 
 Orca publica `usedPercent`: el puente calcula **`remainingPercent = 100 - usedPercent`**, y muestra cada ventana (por ejemplo 5 horas y 7 días). **No es un contador exacto de tokens**. Si un proveedor no publica cuotas o la lectura falla, el puente dice **no disponible**, nunca inventa un porcentaje. Si el último dato es de hace más de 30 minutos, se marca como **lectura antigua**. Para distintas cuentas, se usan los datos de cuentas inactivas solo cuando Orca los haya almacenado.
 

@@ -40,7 +40,7 @@ export function describeRateLimit(raw) {
   // A failed, idle or in-progress fetch must never make cached percentages appear current.
   const stale=status!=='ok' || updatedAt===null || updatedAt>now+60_000 || now-updatedAt>30*60*1000;
   return {status,updatedAt,stale,windows,buckets,notice,planType:safe(raw.planType),
-    extraUsage:(isObject(raw.extraUsage) && raw.extraUsage.enabled===true)?{unit:raw.extraUsage.unit, balance:Number.isFinite(raw.extraUsage.balance)?raw.extraUsage.balance:null}:null};
+    extraUsage:(isObject(raw.extraUsage) && raw.extraUsage.enabled===true)?{unit:safe(raw.extraUsage.unit), balance:Number.isFinite(raw.extraUsage.balance)?raw.extraUsage.balance:null}:null};
 }
 const safeAccount = (x) => ({id:safe(x.id),name:safe(x.displayName)||safe(x.label)||safe(x.email)||safe(x.id)||'Cuenta sin nombre',needsSignIn:x.needsSignIn===true});
 const makeAccountRows = (snapshot, provider) => {
