@@ -153,3 +153,15 @@ test('una cuota no confirmada nunca se presenta como lectura vigente',()=>{
  const valid=describeRateLimit({status:'ok',updatedAt:now,session:window(30)});
  assert.equal(valid.stale,false);
 });
+
+test('nombres y mensajes de cuotas no permiten controles ni spoofing bidireccional',()=>{
+ const snapshot=fixture();
+ snapshot.result.claude.accounts[0].displayName='Ana\nAdmin\r\u202Etxt.exe\u202C';
+ snapshot.result.rateLimits.codex.error='Error\r\nFalso aviso\u202E';
+ const out=summarizeAccountSnapshot(snapshot);
+ const name=out.accounts.find(x=>x.provider==='claude').accounts[0].name;
+ assert.equal(name,'AnaAdmintxt.exe');
+ const notice=out.usage.find(x=>x.provider==='codex').notice;
+ assert.equal(notice,'ErrorFalso aviso');
+ assert.equal(JSON.stringify(out).includes('\\u202e'),false);
+});

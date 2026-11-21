@@ -6,7 +6,7 @@ const LIMIT = 2_000_000;
 const providers = ['claude','codex','gemini','opencodeGo','kimi','antigravity','minimax','grok','cursor','zcode','muse'];
 const supportedSwitch = new Set(['claude','codex','opencode','devin','antigravity']);
 const isObject = x => x !== null && typeof x === 'object' && !Array.isArray(x);
-const safe = x => typeof x === 'string' ? x.slice(0,160) : null;
+const safe = x => typeof x === 'string' ? x.replace(/[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '').slice(0,160) : null;
 const fromPercent = x => Number.isFinite(x) && x >= 0 && x <= 100 ? Number((100 - x).toFixed(1)) : null;
 const numbersOnly = x => Number.isFinite(x) && x > 0 ? x : null;
 const windowSummary = value => {
