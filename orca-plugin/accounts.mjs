@@ -92,7 +92,7 @@ export function createAccountCli({executable=chooseCliExecutable(), exec=execFil
     exec(executable,args,{encoding:'utf8',timeout:30_000,maxBuffer:LIMIT,windowsHide:true,shell:false},(err,stdout,stderr)=>{
       if(err)return reject(new Error(`No se pudo ejecutar Orca CLI (${err.code||'error'}). Activa Orca CLI en Settings > General.`));
       let data;try{data=JSON.parse(stdout)}catch{return reject(new Error('Orca CLI no devolvió JSON. Comprueba orca status --json.'))}
-      if(data?.ok!==true || !isObject(data.result))return reject(new Error(safe(data?.error?.message)||'Orca CLI respondió con error'));
+      if(data?.ok!==true || !isObject(data.result))return reject(new Error('Orca CLI respondió con error; consulta orca status --json y los registros de Orca'));
       resolve(data);
     });
   });
