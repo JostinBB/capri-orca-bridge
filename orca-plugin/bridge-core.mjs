@@ -36,7 +36,9 @@ export function makeBridge(orca, accountCli) {
     // 1.10 introduce workspaceId en agents.list. Versiones anteriores solo ven el workspace enfocado.
     supports('agents.list');
     if ((orca.api?.minor || 0) < 10) throw new BridgeError('unsupported', 'Para consultar agentes de otros proyectos se necesita Orca Host API 1.10 o posterior');
-    return asArray((await api('agents.list', {workspaceId})).agents);
+    const result = await api('agents.list', {workspaceId});
+    if (result?.truncated) throw new BridgeError('truncated', 'Orca ha truncado la lista de agentes; no se seleccionara una terminal a ciegas');
+    return asArray(result?.agents);
   };
   const agentsFor = async workspaceId => {
     await findWorkspace(workspaceId);

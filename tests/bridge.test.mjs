@@ -209,3 +209,13 @@ test('no afirma inicio de agente si Host API no devuelve terminalId',async()=>{
  const bridge=makeBridge(orca);
  await promiseError(()=>bridge.dispatch('launch_agent',{workspaceId:'wt-ventas',agent:'codex'}),'not_accepted');
 });
+
+
+test('no elige una terminal cuando Orca trunca agents.list',async()=>{
+ const {orca,calls}=mock();const original=orca.host.call;
+ orca.host.call=async(m,p)=>m==='agents.list'?{truncated:true,agents:[{terminalId:'t-claude',agent:'claude',state:'waiting'}]}:original(m,p);
+ const bridge=makeBridge(orca);
+ await promiseError(()=>bridge.dispatch('send_prompt',{workspaceId:'wt-ventas',agent:'claude',prompt:'No enviar a una lista incompleta'}),'truncated');
+ await promiseError(()=>bridge.dispatch('agents',{workspaceId:'wt-ventas'}),'truncated');
+ assert.equal(calls.some(x=>x.m==='terminal.sendText'),false);
+});

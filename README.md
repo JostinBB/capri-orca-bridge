@@ -128,3 +128,4 @@ El código completo de pruebas y resultados está en `REPORTE_PRUEBAS.md`. La si
 - [Orca handoff Codex](https://github.com/stablyai/orca/blob/main/docs/site/content/docs/agents/codex.mdx)
 
 Proyecto independiente; no está afiliado a los autores de Capri u Orca.
+**Seguridad de selección:** si Orca marca `agents.list` como truncada, el puente rechaza la consulta y el envío a terminales hasta obtener una lista completa; no selecciona una terminal de un resultado parcial.
