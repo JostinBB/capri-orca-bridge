@@ -93,7 +93,7 @@ La API de plugins tampoco expone enviar prompts a toda sesión **Chat UI**. El p
 - Se admiten además identificadores documentados por Orca como `mimo-code`, `prime-agent`, `qoder-cn`, `zcode`, `omp`, `dsh` y `jcode`. Las variantes habladas «Mimo Code» y «Prime Agent» se normalizan. Que Orca documente un identificador **no significa** que ese agente esté instalado o autenticado.
 - Revisadas las notas de Capri v0.9.3.1 (cambios en la búsqueda web y el antivirus de Windows) y la referencia Orca Host API 1.10, sin afirmar validación de integración real en Windows.
 
-## Verificación y diagnóstico
+**Seguridad de errores CLI:** el puente no reenvía mensajes de error arbitrarios de `orca account list --json` a la respuesta HTTP, porque podrían contener rutas locales, credenciales o información de autenticación. Devuelve un diagnóstico genérico y remite a `orca status --json` y a los registros de Orca para investigar localmente. Esta protección no sustituye la autenticación del servidor loopback.\n\n## Verificación y diagnóstico
 
 Desde la carpeta raíz:
 

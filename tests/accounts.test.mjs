@@ -74,6 +74,19 @@ test('mensaje claro cuando la CLI devuelve error o salida que no es JSON',async(
  const err=createAccountCli({executable:'orca',exec:(exe,args,opts,cb)=>cb(Object.assign(new Error('not found'),{code:'ENOENT'}),'','')});
  await assert.rejects(()=>err.list(),/Activa Orca CLI/);
 });
+test('no expone secretos ni rutas en errores no confiables de Orca CLI',async()=>{
+ const secret='ghp_PRIVATE_TEST_TOKEN_123';
+ const path='C:\\\\Users\\\\test\\\\AppData\\\\Roaming\\\\Orca\\\\auth.json';
+ for(const leaked of [secret,path]) {
+  const cli=createAccountCli({executable:'orca',exec:(exe,args,opts,cb)=>cb(null,JSON.stringify({ok:false,error:{message:leaked}}),'')});
+  await assert.rejects(()=>cli.list(),error=>{
+   assert.match(error.message,/Orca CLI respondió con error/);
+   assert.equal(error.message.includes(leaked),false);
+   return true;
+  });
+ }
+});
+
 test('cambia cuenta solo si figura en Orca y verifica selección posterior',async()=>{
  const cli=fakeCli();
  const result=await accountOperation(cli,'select_account',{provider:'claude',accountId:'acct-claude-2'});
