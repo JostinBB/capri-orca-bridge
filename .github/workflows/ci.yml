@@ -10,10 +10,10 @@ jobs:
   node-and-static:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: '22', package-manager-cache: false }
+      - uses: actions/setup-python@v6
         with: { python-version: '3.12' }
       - name: Validate plugin JS
         run: |
@@ -31,7 +31,7 @@ jobs:
   compile-csharp-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Compile single-file Capri mod against contract stub (.NET Windows)
         run: dotnet build tests/windows-compile/CapriBridgeCompile.csproj -c Release -v minimal
       - name: Package smoke test and SHA-256 verification
